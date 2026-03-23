@@ -143,11 +143,12 @@ result = MD(
   <Tab title="NVE">
 ```python
 from ase.build import bulk
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.md import run as MD
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
 atoms = bulk("Cu", "fcc", a=3.6).repeat(3)
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 # Microcanonical simulation — no thermostat
 result = MD(
@@ -167,11 +168,12 @@ print(f"Simulated {result['n_steps']} steps in {result['runtime']}")
   <Tab title="NVT (Langevin)">
 ```python
 from ase.build import bulk
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.md import run as MD
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
 atoms = bulk("Cu", "fcc", a=3.6).repeat(3)
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 # Canonical MD with Langevin thermostat
 result = MD(
@@ -192,11 +194,12 @@ result = MD(
 ```python
 import numpy as np
 from ase.build import bulk
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.md import run as MD
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
 atoms = bulk("Cu", "fcc", a=3.6).repeat(3)
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 # Ramp temperature from 300 K to 1200 K
 result = MD(
@@ -214,11 +217,12 @@ result = MD(
 ```python
 from ase import units
 from ase.build import bulk
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.md import run as MD
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
 atoms = bulk("Cu", "fcc", a=3.6).repeat(3)
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 # Isothermal-isobaric MD with Nose-Hoover barostat
 result = MD(

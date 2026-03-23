@@ -119,12 +119,13 @@ result = ELASTICITY(
 ```python
 import numpy as np
 from ase.build import bulk
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.elasticity import run as ELASTICITY
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
 # BCC iron
 atoms = bulk("Fe", "bcc", a=2.87)
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 result = ELASTICITY(
     atoms=atoms,

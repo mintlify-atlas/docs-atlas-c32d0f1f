@@ -154,7 +154,7 @@ result = OPT(
     filter="FrechetCell",        # relax cell shape and volume
     criterion={"fmax": 0.01},    # convergence threshold in eV/Å
 )
-# result is the relaxed Atoms object
+# result["atoms"] — relaxed Atoms; result["converged"] — bool; result["steps"] — int
 ```
 
 ### EOS — Equation of state
@@ -175,7 +175,7 @@ result = EOS(
     max_abs_strain=0.1,  # ±10 % volume range
     npoints=11,          # number of EV sample points
 )
-# result["bulk_modulus"], result["eq_volume"], result["eq_energy"]
+# result["K"] — bulk modulus (GPa); result["v0"] — eq. volume (Å³); result["e0"] — eq. energy (eV)
 ```
 
 ### MD — Molecular dynamics

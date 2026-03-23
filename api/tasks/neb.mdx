@@ -192,10 +192,11 @@ Both functions return the same structure:
 ```python
 from ase.build import fcc100, add_adsorbate
 from ase.constraints import FixAtoms
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.neb import run as NEB
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 # Build initial and final images manually
 initial = fcc100("Al", size=(2, 2, 3))
@@ -221,10 +222,11 @@ print(f"Forward barrier: {forward_barrier:.3f} eV")
   <Tab title="NEB from endpoints">
 ```python
 from ase.build import bulk
+from mlip_arena.models import MLIPEnum
 from mlip_arena.tasks.neb import run_from_endpoints as NEB_FROM_ENDPOINTS
-from mlip_arena.models import load_calculator
+from mlip_arena.tasks.utils import get_calculator
 
-calculator = load_calculator("MACE-MP-0")
+calculator = get_calculator(MLIPEnum["MACE-MP(M)"])
 
 # Vacancy migration in FCC copper
 initial = bulk("Cu", "fcc", a=3.6).repeat(3)

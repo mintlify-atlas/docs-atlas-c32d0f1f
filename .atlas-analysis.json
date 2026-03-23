@@ -1,0 +1,122 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "MLIP Arena",
+  "projectDescription": "A fair and transparent benchmark platform for evaluating foundation machine learning interatomic potentials (MLIPs) beyond conventional error metrics, featuring physical soundness tests and utilitarian performance evaluation.",
+  "theme": "palm",
+  "primaryColor": "#4F46E5",
+  "lightColor": "#818CF8",
+  "darkColor": "#3730A3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/models",
+              "concepts/tasks",
+              "concepts/workflows"
+            ]
+          },
+          {
+            "group": "Tasks",
+            "pages": [
+              "tasks/overview",
+              "tasks/structure-optimization",
+              "tasks/equation-of-state",
+              "tasks/molecular-dynamics",
+              "tasks/phonon",
+              "tasks/neb",
+              "tasks/elasticity"
+            ]
+          },
+          {
+            "group": "Benchmarks",
+            "pages": [
+              "benchmarks/overview",
+              "benchmarks/homonuclear-diatomics",
+              "benchmarks/equation-of-state",
+              "benchmarks/energy-volume-scans",
+              "benchmarks/stability",
+              "benchmarks/combustion"
+            ]
+          },
+          {
+            "group": "Contributing",
+            "pages": [
+              "contributing/overview",
+              "contributing/add-model",
+              "contributing/add-benchmark"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Models",
+            "pages": [
+              "api/models/mlip",
+              "api/models/mlip-calculator",
+              "api/models/registry"
+            ]
+          },
+          {
+            "group": "Tasks",
+            "pages": [
+              "api/tasks/opt",
+              "api/tasks/eos",
+              "api/tasks/md",
+              "api/tasks/phonon",
+              "api/tasks/neb",
+              "api/tasks/elasticity"
+            ]
+          },
+          {
+            "group": "Utilities",
+            "pages": [
+              "api/utils/calculator",
+              "api/utils/device"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Fair and reproducible benchmarks beyond DFT error metrics",
+    "Unified interface for 15+ foundation MLIP models (MACE-MP, CHGNet, M3GNet, SevenNet, ORB, eqV2, and more)",
+    "Prefect-powered workflow orchestration for parallel benchmark execution at HPC scale",
+    "Physical soundness tests: homonuclear diatomics, equation of state, energy conservation, force equivariance",
+    "Molecular dynamics benchmarks: MD stability and combustion reactions",
+    "Modular task system: OPT, EOS, MD, PHONON, NEB, ELASTICITY",
+    "Streamlit leaderboard with real-time benchmark results on Hugging Face Spaces",
+    "NeurIPS 2025 Spotlight paper recognition",
+    "HuggingFace model hub integration for easy model contribution"
+  ],
+  "publicApiSurface": [
+    "MLIPEnum — Enum of all available MLIP models",
+    "MLIPMap — Dict mapping model names to calculator classes",
+    "MLIP — Base class for HuggingFace-integrated MLIP models",
+    "MLIPCalculator — ASE Calculator base class for MLIPs",
+    "mlip_arena.tasks.OPT — Structure optimization task",
+    "mlip_arena.tasks.EOS — Equation of state task",
+    "mlip_arena.tasks.MD — Molecular dynamics task",
+    "mlip_arena.tasks.PHONON — Phonon calculation task",
+    "mlip_arena.tasks.NEB — Nudged elastic band task",
+    "mlip_arena.tasks.NEB_FROM_ENDPOINTS — NEB with image interpolation",
+    "mlip_arena.tasks.ELASTICITY — Elastic tensor calculation task",
+    "mlip_arena.tasks.utils.get_calculator — Get calculator for a given model"
+  ]
+}

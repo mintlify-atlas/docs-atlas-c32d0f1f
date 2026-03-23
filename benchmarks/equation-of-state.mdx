@@ -1,0 +1,125 @@
+---
+title: "Equation of state"
+description: "Evaluating bulk moduli and energy–volume curves for WBM bulk crystals using Birch-Murnaghan fitting."
+---
+
+## Physical motivation
+
+The equation of state (EOS) of a crystal describes how its total energy changes as a function of unit cell volume. Its key output is the **bulk modulus** B₀ (in GPa), which measures a material's resistance to uniform compression. A model that correctly predicts EOS curves demonstrates:
+
+- Accurate energy derivatives with respect to volume (related to pressure)
+- Consistent behavior under both compression and tension
+- Physically plausible response for crystal structures spanning a wide range of chemistries
+
+The bulk modulus is one of the most directly measurable mechanical properties and serves as a concrete, experiment-comparable output that sidesteps DFT-reference dependence.
+
+## What is measured
+
+For each structure in the WBM dataset, the benchmark:
+
+1. Relaxes the structure to its equilibrium geometry using the MLIP
+2. Applies isotropic volumetric strains from −10% to +10% around the relaxed volume (11 points by default)
+3. Computes the energy at each strained volume
+4. Fits a **Birch-Murnaghan EOS** to extract B₀, the equilibrium volume V₀, and the equilibrium energy E₀
+
+The EOS task is implemented in `mlip_arena.tasks.eos` using `pymatgen.analysis.eos.BirchMurnaghan`.
+
+### Dataset
+
+The benchmark uses structures from the **WBM dataset** (Wang, Bai, and Materials Project). The compiled structures are stored in `benchmarks/wbm_structures.db` as an ASE database file.
+
+<Info>
+  The WBM dataset contains materials predicted to be thermodynamically stable by a high-throughput DFT screening workflow. It spans a broad range of elemental compositions and crystal symmetries.
+</Info>
+
+### Metrics
+
+The leaderboard reports the following per-structure metrics, aggregated across all evaluated structures:
+
+| Metric | Description |
+|--------|-------------|
+| `volume-ratio` V/V₀ | Unit cell volume normalized by the equilibrium volume |
+| `energy-delta-per-volume-b0` ΔE/(BV₀) | Relative energy normalized by bulk modulus and equilibrium volume |
+| `energy-diff-flip-times` | Number of sign changes in the energy derivative — a proxy for curve smoothness |
+| `tortuosity` | Total variation of the energy curve divided by its range — penalizes noisy curves |
+| `spearman-compression-energy` | Spearman rank correlation of energy vs. volume under compression (should be positive) |
+| `spearman-tension-energy` | Spearman rank correlation of energy vs. volume under tension (should be negative) |
+| `missing` | Whether the model failed to produce results for this structure |
+
+<Note>
+  The `tortuosity` and `energy-diff-flip-times` metrics are model-architecture-agnostic proxies for physical consistency. A physically correct EOS curve should be smooth and convex near the minimum, with no oscillations.
+</Note>
+
+## Model support
+
+The following models support this benchmark (`gpu-tasks: eos_bulk` in the model registry):
+
+| Model | Family | Training data |
+|-------|--------|---------------|
+| MACE-MP(M) | mace-mp | MPTrj |
+| MACE-MPA | mace-mp | MPTrj, Alexandria |
+| CHGNet | chgnet | MPTrj |
+| M3GNet | matgl | MPF |
+| MatterSim | mattersim | MPTrj, Alexandria |
+| ORBv2 | orb | MPTrj, Alexandria |
+| SevenNet | sevennet | MPTrj |
+| eSEN | fairchem | OMat, MPTrj, Alexandria |
+
+## How to run
+
+The benchmark uses Prefect for parallel orchestration and Dask-JobQueue for dispatch to SLURM clusters.
+
+<Steps>
+  <Step title="Configure your cluster">
+    Edit the SLURM cluster settings in `benchmarks/eos_bulk/run.py` to match your HPC environment. The defaults allocate 1 GPU per node with 64 GB RAM and a 30-minute wall time.
+
+    ```python
+    cluster_kwargs = dict(
+        cores=1,
+        memory="64 GB",
+        processes=1,
+        account="your-account",
+        walltime="00:30:00",
+    )
+    cluster = SLURMCluster(**cluster_kwargs)
+    cluster.adapt(minimum_jobs=25, maximum_jobs=50)
+    ```
+
+    Adjust `minimum_jobs` and `maximum_jobs` based on the number of structures and models you want to run.
+  </Step>
+  <Step title="Run the benchmark">
+    ```bash
+    python benchmarks/eos_bulk/run.py
+    ```
+
+    Results are saved as Parquet files: `benchmarks/eos_bulk/<ModelName>.parquet`.
+  </Step>
+  <Step title="Analyze results">
+    ```bash
+    python benchmarks/eos_bulk/analyze.py
+    ```
+
+    This generates `summary.csv` and `summary.tex` with per-model aggregate statistics.
+
+    To plot the EOS curves for individual structures:
+
+    ```bash
+    python benchmarks/eos_bulk/plot.py
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  This benchmark is designed for HPC resources. Running it locally for all WBM structures and all models is computationally expensive. Consider subsetting the structure database during development.
+</Warning>
+
+## Interpreting results
+
+A model with good EOS performance shows:
+
+- **Low tortuosity** — the energy curve is smooth without oscillations between sampled volumes
+- **Zero energy-diff-flip-times** — the energy decreases monotonically under compression and increases monotonically under tension, as physics requires
+- **Spearman correlation near +1 (compression) and −1 (tension)** — the model correctly predicts that compressing a crystal raises its energy and expanding it also raises its energy
+- **Low missing rate** — the model can process diverse crystal structures without numerical failures
+
+A high number of `energy-diff-flip-times` or a tortuosity significantly above 1.0 indicates that the model's energy surface is non-convex, which will cause instabilities in geometry optimization and MD simulations.

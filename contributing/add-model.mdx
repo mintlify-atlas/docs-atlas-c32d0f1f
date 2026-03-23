@@ -1,0 +1,291 @@
+---
+title: "Adding a new model"
+description: "Register a pretrained MLIP in MLIP Arena so it participates in all benchmarks."
+---
+
+MLIP Arena supports two approaches for registering a model. Choose the one that best matches your model's codebase.
+
+<Tabs>
+  <Tab title="External ASE Calculator (easy)">
+
+## External ASE Calculator
+
+This approach is recommended when your model already ships an [ASE Calculator](https://wiki.fysik.dtu.dk/ase/ase/calculators/calculators.html) class, or when you want to wrap an existing third-party package quickly.
+
+<Steps>
+  <Step title="Implement your calculator class">
+    Create a new Python file in `mlip_arena/models/externals/`. Name the file after your model family (e.g., `mymodel.py`).
+
+    Subclass the upstream ASE calculator for your model and override `__init__` and `calculate` as needed. The following is the complete `CHGNet` implementation as a reference:
+
+    ```python chgnet.py
+    from __future__ import annotations
+
+    from typing import Literal
+
+    from ase import Atoms
+    from chgnet.model.dynamics import CHGNetCalculator
+    from chgnet.model.model import CHGNet as CHGNetModel
+
+    from mlip_arena.models.utils import get_freer_device
+
+
+    class CHGNet(CHGNetCalculator):
+        def __init__(
+            self,
+            checkpoint: CHGNetModel | None = None,
+            device: str | None = None,
+            stress_weight: float | None = 1 / 160.21766208,
+            on_isolated_atoms: Literal["ignore", "warn", "error"] = "warn",
+            **kwargs,
+        ) -> None:
+            use_device = str(device or get_freer_device())
+            super().__init__(
+                model=checkpoint,
+                use_device=use_device,
+                stress_weight=stress_weight,
+                on_isolated_atoms=on_isolated_atoms,
+                **kwargs,
+            )
+
+        def calculate(
+            self,
+            atoms: Atoms | None = None,
+            properties: list | None = None,
+            system_changes: list | None = None,
+        ) -> None:
+            super().calculate(atoms, properties, system_changes)
+
+            # for ase.io.write compatibility
+            self.results.pop("crystal_fea", None)
+    ```
+
+    <Warning>
+      Remove any unnecessary keys from `self.results` inside your `calculate` method. Extra keys that are not standard ASE properties (such as `crystal_fea` above) cause errors during molecular dynamics simulations and trajectory writes. Use `self.results.pop("key", None)` to strip them after calling `super().calculate()`.
+    </Warning>
+
+    Use `get_freer_device()` from `mlip_arena.models.utils` to automatically select the least-loaded GPU, or fall back to CPU when no GPU is available. Pass `device` as a constructor argument so callers can override it.
+  </Step>
+
+  <Step title="Add your model to registry.yaml">
+    Open `mlip_arena/models/registry.yaml` and add an entry for your model. Use the class name as the top-level key:
+
+    ```yaml
+    CHGNet:
+      module: externals
+      class: CHGNet
+      family: chgnet
+      package: chgnet==0.3.8
+      checkpoint: v0.3.0
+      username: cyrusyc
+      last-update: 2024-07-08T00:00:00
+      datetime: 2024-07-08T00:00:00
+      datasets:
+        - MPTrj
+      gpu-tasks:
+        - homonuclear-diatomics
+        - stability
+        - combustion
+        - eos_bulk
+        - wbm_ev
+      github: https://github.com/CederGroupHub/chgnet
+      doi: https://doi.org/10.1038/s42256-023-00716-3
+      date: 2023-02-28
+      prediction: EFSM
+      nvt: true
+      npt: true
+      license: BSD-3-Clause
+    ```
+
+    See the [registry fields reference](#registry-yaml-fields) below for a description of every field.
+  </Step>
+
+  <Step title="Test your calculator">
+    Run the external calculator test suite to confirm your model loads and produces valid outputs:
+
+    ```bash
+    pytest -vra tests/test_external_calculators.py
+    ```
+
+    The test instantiates every registered model, creates a two-atom `Atoms` object, and asserts that `get_potential_energy()`, `get_forces()`, and `get_stress()` return arrays of the correct shape and dtype.
+  </Step>
+
+  <Step title="Open a pull request">
+    Commit your new file and the registry entry, then open a PR against `main`. The CI pipeline will run the full test suite and perform a trial sync to the Hugging Face Space.
+  </Step>
+</Steps>
+
+  </Tab>
+  <Tab title="HuggingFace Model (recommended)">
+
+## HuggingFace Model
+
+This approach is recommended for new models being released for the first time. Hosting weights on the Hugging Face Hub makes them versioned, discoverable, and directly downloadable by Arena.
+
+<Steps>
+  <Step title="Inherit from ModelHubMixin">
+    Add `PyTorchModelHubMixin` (or `PytorchModelHubMixin`) to your model class definition so it gains `from_pretrained` and `push_to_hub` methods:
+
+    ```python
+    from huggingface_hub import PyTorchModelHubMixin
+    import torch.nn as nn
+
+    class MyModel(nn.Module, PyTorchModelHubMixin):
+        def __init__(self, config):
+            super().__init__()
+            # ... model architecture ...
+
+        def forward(self, inputs):
+            # ... forward pass ...
+            pass
+    ```
+
+    Refer to the [HuggingFace ModelHubMixin docs](https://huggingface.co/docs/huggingface_hub/en/package_reference/mixins#huggingface_hub.PyTorchModelHubMixin) for the full API.
+  </Step>
+
+  <Step title="Create a Hugging Face model repository">
+    Go to [huggingface.co/new](https://huggingface.co/new) and create a new model repository. Choose a descriptive name (e.g., `my-org/my-mlip-v1`).
+  </Step>
+
+  <Step title="Upload your model with push_to_hub">
+    After training, push your weights and config to the Hub:
+
+    ```python
+    model = MyModel(config)
+    # ... train ...
+
+    model.push_to_hub("my-org/my-mlip-v1")
+    ```
+
+    Your model file, config, and any additional artifacts will be uploaded to the repository.
+  </Step>
+
+  <Step title="Implement the MLIP I/O interface">
+    Create a new file in `mlip_arena/models/externals/` that wraps your model as an ASE Calculator. The calculator must:
+
+    - Accept a `checkpoint` argument (HF repo ID or local path) and a `device` argument.
+    - Implement `calculate(atoms, properties, system_changes)` and populate `self.results` with at minimum `energy` (eV), `forces` (eV/Å), and optionally `stress` (eV/Å³).
+    - Remove any non-standard keys from `self.results` before returning.
+    - Use `get_freer_device()` from `mlip_arena.models.utils` for automatic GPU selection.
+
+    ```python mymodel.py
+    from __future__ import annotations
+
+    import torch
+    from ase import Atoms
+    from ase.calculators.calculator import Calculator, all_changes
+
+    from mlip_arena.models.utils import get_freer_device
+
+    # Import your model class
+    from my_package import MyModel as MyModelBackend
+
+
+    class MyModel(Calculator):
+        implemented_properties = ["energy", "forces", "stress"]
+
+        def __init__(
+            self,
+            checkpoint: str = "my-org/my-mlip-v1",
+            device: str | None = None,
+            **kwargs,
+        ) -> None:
+            super().__init__(**kwargs)
+            self.device = device or str(get_freer_device())
+            self.model = MyModelBackend.from_pretrained(checkpoint).to(self.device)
+            self.model.eval()
+
+        def calculate(
+            self,
+            atoms: Atoms | None = None,
+            properties: list | None = None,
+            system_changes: list | None = None,
+        ) -> None:
+            super().calculate(atoms, properties, system_changes)
+
+            # Run inference
+            with torch.no_grad():
+                out = self.model(atoms_to_input(atoms, self.device))
+
+            self.results = {
+                "energy": float(out["energy"]),
+                "forces": out["forces"].cpu().numpy(),
+                "stress": out["stress"].cpu().numpy(),
+            }
+    ```
+
+    <Tip>
+      Follow the registration workflow described in `mlip_arena/models/README.md`: Arena uses `ast` to parse class definitions from uploaded scripts, so keep your class at module level and avoid dynamic class construction.
+    </Tip>
+  </Step>
+
+  <Step title="Add your model to registry.yaml">
+    Open `mlip_arena/models/registry.yaml` and add an entry. The `module` field should be `externals` and the `class` field should match your Python class name exactly:
+
+    ```yaml
+    MyModel:
+      module: externals
+      class: MyModel
+      family: my-model-family
+      package: my-package==1.0.0
+      checkpoint: my-org/my-mlip-v1
+      username: my-hf-username
+      last-update: 2025-01-01T00:00:00
+      datetime: 2025-01-01T00:00:00
+      datasets:
+        - MPTrj
+      gpu-tasks:
+        - homonuclear-diatomics
+        - stability
+        - eos_bulk
+      github: https://github.com/my-org/my-mlip
+      doi: https://arxiv.org/abs/XXXX.XXXXX
+      date: 2025-01-01
+      prediction: EFS
+      nvt: true
+      npt: true
+      license: MIT
+    ```
+  </Step>
+
+  <Step title="Run tests and open a pull request">
+    ```bash
+    pytest -vra tests/test_external_calculators.py
+    ```
+
+    Once tests pass, open a PR. The CI will also run `sync-hf.yaml` on merge to update the live leaderboard.
+  </Step>
+</Steps>
+
+  </Tab>
+</Tabs>
+
+---
+
+## registry.yaml fields
+
+Every entry in `mlip_arena/models/registry.yaml` supports the following fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `module` | Yes | Python submodule under `mlip_arena/models/`. Use `externals` for all external calculators. |
+| `class` | Yes | Exact Python class name of the calculator. Must match the class defined in the module. |
+| `family` | Yes | Model family name (e.g., `mace-mp`, `chgnet`). Used for grouping on the leaderboard. |
+| `package` | Yes | PyPI package name and pinned version to install (e.g., `chgnet==0.3.8`). |
+| `checkpoint` | Yes | Default checkpoint identifier — a version string, filename, or HF repo ID. |
+| `username` | No | HuggingFace username of the model's contributor or upstream author. |
+| `datasets` | Yes | List of training datasets (e.g., `MPTrj`, `Alexandria`, `OMat`). |
+| `gpu-tasks` | No | List of benchmark task IDs that run on GPU. |
+| `cpu-tasks` | No | List of benchmark task IDs that run on CPU. |
+| `prediction` | Yes | Output properties: `E` (energy), `F` (forces), `S` (stress), `M` (magnetic moments). Combine as `EFS`, `EFSM`, etc. |
+| `nvt` | Yes | `true` if the model supports NVT molecular dynamics. |
+| `npt` | Yes | `true` if the model supports NPT molecular dynamics. |
+| `license` | Yes | SPDX license identifier (e.g., `MIT`, `Apache-2.0`, `BSD-3-Clause`). |
+| `doi` | No | DOI or arXiv URL of the paper describing the model. |
+| `github` | No | URL of the model's source code repository. |
+| `date` | Yes | Release date of the model in `YYYY-MM-DD` format. |
+| `datetime` | Yes | Full ISO 8601 timestamp of the last update. |
+
+<Tip>
+  The `gpu-tasks` and `cpu-tasks` lists control which benchmarks will be run for your model on the Hugging Face Space. Add only the tasks your model has been validated on. You can expand this list in future PRs.
+</Tip>

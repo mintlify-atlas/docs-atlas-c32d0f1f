@@ -1,0 +1,120 @@
+---
+title: 'OPT — Structure Optimization'
+description: 'Run geometry optimization on an atomic structure using ASE optimizers and filters.'
+---
+
+## Overview
+
+The `OPT` task relaxes atomic positions and (optionally) the unit cell of an `Atoms` object using an ASE optimizer. It is registered as a Prefect task with the name **`OPT`** and uses a `TASK_SOURCE + INPUTS` cache policy so that identical inputs reuse previously computed results.
+
+## Function signature
+
+```python
+from mlip_arena.tasks.optimize import run as OPT
+
+result = OPT(
+    atoms,
+    calculator,
+    optimizer=BFGSLineSearch,
+    optimizer_kwargs=None,
+    filter=None,
+    filter_kwargs=None,
+    criterion=None,
+    symmetry=False,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  The input atomic structure. A copy is made internally so the original object is not mutated.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  The ASE-compatible calculator used to evaluate energies and forces.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGSLineSearch">
+  Optimizer class or string name. Supported string values:
+  `"MDMin"`, `"FIRE"`, `"FIRE2"`, `"LBFGS"`, `"LBFGSLineSearch"`,
+  `"BFGS"`, `"BFGSLineSearch"`, `"QuasiNewton"`, `"GPMin"`,
+  `"CellAwareBFGS"`, `"ODE12r"`.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.filter" type="Filter | str | None" default="None">
+  ASE filter (cell/strain wrapper) applied around `atoms` before passing to the optimizer. Supported string values: `"Filter"`, `"UnitCell"`, `"ExpCell"`, `"Strain"`, `"FrechetCell"`. Set to `None` to optimize atomic positions only.
+</ParamField>
+
+<ParamField path="body.filter_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the filter constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criteria passed to `optimizer.run()`. Defaults to `{"steps": 1000}` when `None`. Common keys include `fmax` (force threshold in eV/Å) and `steps` (maximum number of steps).
+</ParamField>
+
+<ParamField path="body.symmetry" type="boolean" default="false">
+  When `True`, applies an ASE `FixSymmetry` constraint so that the crystal symmetry is preserved throughout the relaxation.
+</ParamField>
+
+## Return value
+
+```python
+{
+    "atoms": Atoms,   # relaxed structure
+    "steps": int,     # number of optimizer steps taken
+    "converged": bool # whether convergence criterion was met
+}
+```
+
+<ResponseField name="atoms" type="ase.Atoms">
+  The relaxed atomic structure with the calculator attached.
+</ResponseField>
+
+<ResponseField name="steps" type="int">
+  Total number of optimizer steps performed.
+</ResponseField>
+
+<ResponseField name="converged" type="bool">
+  `True` if the optimizer reached the convergence criterion before exhausting the step budget.
+</ResponseField>
+
+## Prefect task behavior
+
+- **Task name**: `OPT`
+- **Run name**: generated as `OPT: <formula> - <calculator>`.
+- **Cache policy**: `TASK_SOURCE + INPUTS` — results are cached based on the task source code and all input values. Identical calls return the cached result without re-running.
+- **Retries**: none by default (use `OPT.with_options(retries=N)` to add retries).
+- **Submittable**: call `OPT.submit(...)` to run asynchronously inside a Prefect flow.
+
+## Example
+
+```python
+from ase.build import bulk
+from mlip_arena.tasks.optimize import run as OPT
+
+# Build a simple FCC copper cell
+atoms = bulk("Cu", "fcc", a=3.6)
+
+# Load any MLIP calculator (example uses a hypothetical model)
+from mlip_arena.models import load_calculator
+calculator = load_calculator("MACE-MP-0")
+
+# Relax atomic positions AND cell shape with FrechetCell filter
+result = OPT(
+    atoms=atoms,
+    calculator=calculator,
+    optimizer="BFGS",
+    filter="FrechetCell",
+    criterion={"fmax": 0.01, "steps": 500},
+    symmetry=True,
+)
+
+print(result["converged"])  # True / False
+print(result["steps"])      # steps taken
+print(result["atoms"])      # relaxed Atoms
+```

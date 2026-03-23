@@ -1,0 +1,179 @@
+---
+title: "System architecture"
+description: "How MLIP Arena orchestrates models, tasks, flows, and benchmarks into a unified evaluation platform."
+keywords: ["architecture", "prefect", "huggingface", "ASE", "calculator", "registry", "workflow"]
+---
+
+MLIP Arena is built around a layered pipeline: **models** expose a common ASE Calculator interface, **tasks** apply individual operations to structures, **flows** orchestrate tasks in parallel across models, **benchmarks** collect and upload results, and a live **leaderboard** displays them on Hugging Face Spaces.
+
+## Pipeline overview
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Hugging Face Hub                      │
+│  ┌──────────────┐  ┌──────────────┐  ┌───────────────┐  │
+│  │  Model repos │  │ Dataset repo │  │    Spaces     │  │
+│  │ (checkpoints)│  │  (results)   │  │ (leaderboard) │  │
+│  └──────┬───────┘  └──────▲───────┘  └───────▲───────┘  │
+└─────────┼────────────────┼────────────────────┼──────────┘
+          │ from_pretrained │ upload_file        │ Streamlit
+          ▼                │                    │
+┌─────────────────┐        │          ┌──────────────────┐
+│   Model layer   │        │          │   Leaderboard    │
+│  ┌───────────┐  │        │          │   serve/app.py   │
+│  │ registry  │  │        │          └──────────────────┘
+│  │ .yaml     │  │        │
+│  └─────┬─────┘  │        │
+│  ┌─────▼─────┐  │        │
+│  │ MLIPEnum  │  │        │
+│  └─────┬─────┘  │        │
+│  ┌─────▼──────┐ │        │
+│  │ASE Calc-   │ │        │
+│  │ulator API  │ │        │
+│  └─────┬──────┘ │        │
+└────────┼────────┘        │
+         │                 │
+         ▼                 │
+┌─────────────────┐        │
+│   Task layer    │        │
+│  @task (Prefect)│        │
+│  OPT / EOS /    │        │
+│  MD / PHONON /  │────────┘
+│  NEB / ELASTICITY│  results
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Flow layer    │
+│  @flow (Prefect)│
+│  .submit() for  │
+│  parallelism    │
+│  dask_jobqueue  │
+│  (HPC / SLURM)  │
+└─────────────────┘
+```
+
+## Layers in detail
+
+### Models
+
+Every supported MLIP is wrapped as an ASE `Calculator` subclass and registered in `mlip_arena/models/registry.yaml`. At import time `mlip_arena/models/__init__.py` reads the registry, dynamically imports each model class, and builds `MLIPEnum` — a Python `Enum` where each member's value is its calculator class.
+
+Models fall into two categories:
+
+- **External ASE calculators** — implemented under `mlip_arena/models/externals/`. These wrap third-party packages (e.g., `mace-torch`, `chgnet`, `matgl`) and expose an ASE `Calculator` interface.
+- **HuggingFace models** — inherit `MLIP` (which extends `nn.Module` and `PyTorchModelHubMixin`), enabling checkpoint upload and download via the Hub.
+
+### Tasks
+
+A **task** is *one operation on one input structure* decorated with Prefect's `@task`. Each task:
+
+- Accepts an `atoms: Atoms` object and a `calculator: BaseCalculator`.
+- Uses `TASK_SOURCE + INPUTS` cache policy so identical work is not repeated.
+- Returns a dictionary of results (relaxed structure, energies, trajectory data, etc.).
+
+Tasks are composable: `EOS` internally calls `OPT` for full relaxation followed by a series of constrained `OPT` tasks at different volumes.
+
+### Flows
+
+A **flow** wraps multiple task calls under a Prefect `@flow` and uses `.submit()` to dispatch them concurrently to workers. Flows are what you run in production on an HPC cluster or locally with a Prefect agent.
+
+### Benchmarks
+
+Benchmarks are Python scripts (or Jupyter notebooks) under `benchmarks/` that build a flow over all `MLIPEnum` members, collect results, and upload them to the `atomind/mlip-arena` HuggingFace dataset repository.
+
+### Leaderboard
+
+`serve/app.py` is a Streamlit application hosted on Hugging Face Spaces. It reads result data from the dataset repository and renders interactive benchmark pages for each task registered in `mlip_arena/tasks/registry.yaml`.
+
+## Prefect workflow orchestration
+
+MLIP Arena uses [Prefect](https://docs.prefect.io/) as its workflow engine. Prefect provides:
+
+<CardGroup cols={2}>
+  <Card title="Task caching" icon="database">
+    Results are cached by `TASK_SOURCE + INPUTS` policy. Re-running a benchmark skips already-completed calculations.
+  </Card>
+  <Card title="Parallel execution" icon="bolt">
+    `.submit()` dispatches tasks to a Prefect worker pool, enabling concurrent execution across models and structures.
+  </Card>
+  <Card title="HPC integration" icon="server">
+    `dask_jobqueue` integrates with SLURM, PBS, and other schedulers for cluster-scale parallelism.
+  </Card>
+  <Card title="Observability" icon="chart-bar">
+    The Prefect UI tracks task states, logs, and failure reasons for every benchmark run.
+  </Card>
+</CardGroup>
+
+## HuggingFace integration
+
+MLIP Arena uses three HuggingFace surfaces:
+
+| Surface | Purpose | Key operation |
+|---------|---------|---------------|
+| Model repos | Store pretrained MLIP checkpoints | `MLIP.from_pretrained(repo_id)` |
+| Dataset repo (`atomind/mlip-arena`) | Store benchmark results as JSON | `HfApi.upload_file()` |
+| Spaces (`atomind/mlip-arena`) | Host the Streamlit leaderboard | `streamlit run serve/app.py` |
+
+## ASE Calculator abstraction
+
+All models expose a unified interface through ASE's `Calculator` base class. This means any task written against `BaseCalculator` works with any registered model without modification.
+
+```python
+# Any ASE Calculator works as a drop-in
+from mlip_arena.tasks.utils import get_calculator
+from mlip_arena.models import MLIPEnum
+
+calc = get_calculator(MLIPEnum["MACE-MP(M)"])
+atoms.calc = calc
+energy = atoms.get_potential_energy()  # standard ASE API
+```
+
+## Registry pattern
+
+Both models and tasks use a YAML registry as a single source of truth for metadata.
+
+<Tabs>
+  <Tab title="Model registry">
+    `mlip_arena/models/registry.yaml` stores per-model metadata: Python module path, class name, model family, training datasets, supported tasks, prediction types, and license.
+
+    At import time, `__init__.py` reads this file and imports each class:
+
+    ```python
+    # mlip_arena/models/__init__.py (lines 35–56)
+    with open(Path(__file__).parent / "registry.yaml", encoding="utf-8") as f:
+        REGISTRY = yaml.safe_load(f)
+
+    MLIPMap = {}
+    for model, metadata in REGISTRY.items():
+        module = importlib.import_module(
+            f"{__package__}.{metadata['module']}.{metadata['family']}"
+        )
+        MLIPMap[model] = getattr(module, metadata["class"])
+
+    MLIPEnum = Enum("MLIPEnum", MLIPMap)
+    ```
+  </Tab>
+  <Tab title="Task registry">
+    `mlip_arena/tasks/registry.yaml` stores per-benchmark metadata for the leaderboard: category, Streamlit page name, layout, and last-update date. The Streamlit app reads this registry to build its navigation:
+
+    ```python
+    # serve/app.py (lines 5–27)
+    from mlip_arena.tasks import REGISTRY as TASKS
+
+    for task in TASKS:
+        if TASKS[task]['task-page'] is None:
+            continue
+        page = st.Page(
+            f"tasks/{TASKS[task]['task-page']}.py",
+            title=task,
+            icon=":material/target:"
+        )
+        nav[TASKS[task]["category"]].append(page)
+    ```
+  </Tab>
+</Tabs>
+
+<Note>
+  Adding a new model or benchmark does not require changing Python code in the core library — only the relevant YAML registry needs updating.
+</Note>

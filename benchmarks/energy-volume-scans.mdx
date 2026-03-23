@@ -1,0 +1,115 @@
+---
+title: "Energy-volume scans"
+description: "Evaluating energy–volume profiles across WBM dataset structures without structure relaxation, using uniaxial strain."
+---
+
+## Physical motivation
+
+The energy-volume (E-V) scan benchmark tests a model's ability to produce physically consistent energy landscapes across a broad sweep of materials chemistry — specifically for structures drawn from the WBM thermodynamic stability screening dataset.
+
+Unlike the [Equation of State benchmark](/benchmarks/equation-of-state), this benchmark applies **uniaxial strain without prior structure relaxation**. This tests the model's raw energy surface rather than its optimized EOS fit, and is a stricter test of transferability: a model cannot rely on relaxing away an unfavorable starting geometry.
+
+Key questions this benchmark answers:
+- Does the model produce a smooth, bowl-shaped energy well around the reference volume?
+- Does it assign lower energy to compressed and expanded structures in the correct order?
+- Does the energy profile behave consistently across very different crystal chemistries?
+
+## The WBM dataset
+
+The benchmark uses structures from the **WBM dataset** (Wang, Bai, and Materials Project), stored in `benchmarks/wbm_structures.db` as an ASE database file. The WBM dataset was constructed by a high-throughput DFT screening workflow that predicts thermodynamic stability relative to the Materials Project convex hull. It contains materials spanning a wide range of compositions and crystal symmetries.
+
+<Info>
+  The same `wbm_structures.db` file is shared between the Energy-Volume Scans benchmark and the [Equation of State benchmark](/benchmarks/equation-of-state). The two benchmarks differ in their strain protocol: EOS uses isotropic strain after relaxation; E-V scans use uniaxial strain on the unrelaxed reference structure.
+</Info>
+
+## What is measured
+
+For each WBM structure, the benchmark applies uniaxial strain across a range of ±20% in 21 evenly spaced steps, scaling the unit cell while keeping fractional atomic coordinates fixed. At each strain point, the model evaluates the potential energy.
+
+The strain protocol is defined in `benchmarks/wbm_ev/run.py`:
+
+```python
+max_abs_strain = 0.2
+npoints = 21
+for uniaxial_strain in np.linspace(-max_abs_strain, max_abs_strain, npoints):
+    scale_factor = uniaxial_strain + 1
+    cloned.set_cell(c0 * scale_factor, scale_atoms=True)
+    energies.append(cloned.get_potential_energy())
+```
+
+### Metrics
+
+The leaderboard reports the following per-structure metrics:
+
+| Metric | Description |
+|--------|-------------|
+| `volume-ratio` V/V₀ | Strained volume normalized by the reference (unstrained) volume |
+| `energy-delta-per-atom` ΔE/N | Energy relative to the minimum, per atom (eV/atom) |
+| `energy-diff-flip-times` | Number of sign changes in dE/dV — measures curve smoothness |
+| `tortuosity` | Total variation of the energy curve divided by its range |
+| `spearman-compression-energy` | Spearman rank correlation between volume and energy under compression |
+| `spearman-compression-derivative` | Spearman rank correlation between volume and dE/dV under compression |
+| `spearman-tension-energy` | Spearman rank correlation between volume and energy under tension |
+| `missing` | Whether the model failed to return a result for this structure |
+
+<Note>
+  The y-axis on the leaderboard shows relative energy per atom (eV/atom) normalized to zero at the minimum. This makes curves for different materials directly comparable on the same plot.
+</Note>
+
+## Model support
+
+The following models support this benchmark (`gpu-tasks: wbm_ev` in the model registry):
+
+| Model | Family | Training data |
+|-------|--------|---------------|
+| MACE-MP(M) | mace-mp | MPTrj |
+| MACE-MPA | mace-mp | MPTrj, Alexandria |
+| CHGNet | chgnet | MPTrj |
+| M3GNet | matgl | MPF |
+| MatterSim | mattersim | MPTrj, Alexandria |
+| ORBv2 | orb | MPTrj, Alexandria |
+| SevenNet | sevennet | MPTrj |
+| eqV2(OMat) | fairchem | OMat, MPTrj, Alexandria |
+| eSEN | fairchem | OMat, MPTrj, Alexandria |
+| ALIGNN | alignn | MP22 |
+
+## How to run
+
+<Steps>
+  <Step title="Configure your cluster">
+    Edit the SLURM settings in `benchmarks/wbm_ev/run.py` to match your HPC environment. The benchmark uses Dask-JobQueue to dispatch tasks to SLURM workers.
+  </Step>
+  <Step title="Run the scans">
+    ```bash
+    python benchmarks/wbm_ev/run.py
+    ```
+
+    Results are saved as Parquet files: `benchmarks/wbm_ev/<ModelName>.parquet`.
+  </Step>
+  <Step title="Analyze results">
+    ```bash
+    python benchmarks/wbm_ev/analyze.py
+    ```
+
+    This generates `summary.csv` and `summary.tex` aggregating metrics across all structures per model.
+  </Step>
+</Steps>
+
+<Warning>
+  Running the full benchmark across all WBM structures for all models requires significant GPU time. The `cluster.adapt(minimum_jobs=25, maximum_jobs=50)` setting in `run.py` assumes a large SLURM cluster. Adjust accordingly for smaller environments.
+</Warning>
+
+## Interpreting results
+
+A well-performing model on this benchmark produces E-V profiles that:
+
+- Have a clear **single minimum** near V/V₀ = 1 (the reference DFT volume)
+- Are **smooth and convex** near the minimum, with no energy oscillations
+- Show **physically correct asymptotic behavior** — energy rises monotonically for large compression and large tension
+- Have a low **missing rate** — the model handles diverse crystal chemistries without crashing
+
+A high `tortuosity` score or many `energy-diff-flip-times` indicates that the model's energy landscape is non-convex or noisy, which correlates with instability in downstream MD simulations.
+
+<Tip>
+  Compare E-V scan results against [Equation of State](/benchmarks/equation-of-state) results for the same model. If a model performs well on EOS (which uses relaxed structures) but poorly on E-V scans (unrelaxed), it may be over-relying on structural relaxation to reach the basin of attraction.
+</Tip>

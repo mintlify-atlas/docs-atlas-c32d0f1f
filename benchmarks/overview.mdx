@@ -1,0 +1,143 @@
+---
+title: "Benchmarks overview"
+description: "How MLIP Arena evaluates foundation models beyond DFT error metrics, across Fundamentals and Molecular Dynamics categories."
+---
+
+## Why go beyond DFT error metrics?
+
+Conventional MLIP benchmarks measure how closely a model reproduces DFT-computed energies and forces on a held-out test set. This approach has three well-known failure modes:
+
+- **Data leakage** — test structures are often drawn from the same distribution as training data, inflating apparent accuracy.
+- **Limited transferability** — low force errors on a dataset do not guarantee correct behavior for out-of-distribution structures or physical conditions.
+- **DFT reference dependence** — models trained on different functionals (PBE, r2SCAN, HSE) are hard to compare fairly against a single reference.
+
+MLIP Arena moves the evaluation target from *reproducing DFT numbers* to *producing physically consistent behavior*. Each benchmark probes a concrete physical question — does the model predict the correct dissociation limit? Does it keep a bulk crystal stable under compression? Does it reproduce the reaction enthalpy for hydrogen combustion? These questions have answers that do not depend on a specific DFT functional.
+
+<Note>
+  MLIP Arena was accepted as a **NeurIPS 2025 Spotlight** and an **ICLR 2025 AI4Mat Spotlight**. [Read the paper](https://openreview.net/forum?id=SAT0KPA5UO)
+</Note>
+
+## Benchmark categories
+
+Benchmarks are grouped into two categories that reflect different aspects of model quality.
+
+### Fundamentals
+
+Fundamentals benchmarks test whether a model has learned the basic rules of interatomic interactions. They use static calculations (energy and force evaluations at fixed geometries) and do not require running molecular dynamics. They are therefore fast to run and easy to interpret.
+
+| Benchmark | What it tests | Status |
+|-----------|--------------|--------|
+| [Homonuclear diatomics](/benchmarks/homonuclear-diatomics) | Dissociation energy curves for elemental pairs A₂ | Active |
+| [Equation of state](/benchmarks/equation-of-state) | Energy–volume curves and bulk moduli for WBM bulk crystals | Active |
+| [Energy-volume scans](/benchmarks/energy-volume-scans) | Energy–volume profiles across the full WBM dataset | Active |
+
+### Molecular Dynamics
+
+Molecular Dynamics benchmarks test whether a model can sustain a simulation without diverging, crashing, or producing unphysical trajectories. They reveal failure modes that static benchmarks cannot detect.
+
+| Benchmark | What it tests | Status |
+|-----------|--------------|--------|
+| [MD Stability](/benchmarks/stability) | NVT/NPT survival rate under heating and compression ramps | Active |
+| [Combustion](/benchmarks/combustion) | Hydrogen combustion yield, reaction enthalpy, and COM drift | Active |
+
+## The modular task system
+
+Every benchmark is built from composable tasks in `mlip_arena.tasks`. This means individual calculations are reusable across benchmarks and can be orchestrated in parallel with [Prefect](https://www.prefect.io/).
+
+The core tasks are:
+
+| Task | Import | Description |
+|------|--------|-------------|
+| `OPT` | `mlip_arena.tasks.optimize` | Structure optimization (BFGS, FrechetCell filter) |
+| `EOS` | `mlip_arena.tasks.eos` | Equation of state via Birch-Murnaghan fit |
+| `MD` | `mlip_arena.tasks.md` | Molecular dynamics (NVE, NVT, NPT, temperature scheduling) |
+| `PHONON` | `mlip_arena.tasks.phonon` | Phonon calculation via phonopy |
+| `NEB` | `mlip_arena.tasks.neb` | Nudged elastic band |
+| `ELASTICITY` | `mlip_arena.tasks.elasticity` | Elastic tensor calculation |
+
+Benchmarks combine these tasks and wrap them in Prefect flows for parallel dispatch across HPC clusters.
+
+```python
+from prefect import flow
+from mlip_arena.models import MLIPEnum
+from mlip_arena.tasks import MD
+from mlip_arena.tasks.utils import get_calculator
+from ase.build import bulk
+
+atoms = bulk("Cu", "fcc", a=3.6) * (5, 5, 5)
+
+@flow
+def run_all_models():
+    futures = []
+    for model in MLIPEnum:
+        future = MD.submit(
+            atoms=atoms,
+            calculator=get_calculator(model),
+            ensemble="nvt",
+            total_time=1000,
+            time_step=2,
+        )
+        futures.append(future)
+    return [f.result(raise_on_failure=False) for f in futures]
+```
+
+<Tip>
+  Prefect caches task results automatically. Re-running a benchmark after adding a new model only executes the new model's tasks.
+</Tip>
+
+## Live leaderboard
+
+All benchmark results are visualized in real time on the MLIP Arena Hugging Face Space:
+
+**[huggingface.co/spaces/atomind/mlip-arena](https://huggingface.co/spaces/atomind/mlip-arena)**
+
+The leaderboard is a Streamlit application. For each benchmark you can:
+- Select which models to display
+- Toggle between individual curves and aggregate metrics
+- Download raw result data
+
+<Info>
+  The leaderboard reflects the results stored in `benchmarks/` in the main repository. Results are updated when new benchmark runs are merged.
+</Info>
+
+## Running benchmarks locally
+
+Install the package first:
+
+```bash
+pip install mlip-arena
+```
+
+For benchmarks that require pretrained model weights, install from source:
+
+```bash
+git clone https://github.com/atomind-ai/mlip-arena.git
+cd mlip-arena
+bash scripts/install.sh
+```
+
+Then follow the per-benchmark instructions in each `benchmarks/<name>/` folder. Most benchmarks provide either a Python script (`run.py`) or a Jupyter notebook (`run.ipynb`).
+
+<Warning>
+  GPU-based benchmarks (all tasks listed under `gpu-tasks` in the model registry) require a CUDA-capable device. The Stability and EOS benchmarks are designed for HPC clusters using SLURM and Dask-JobQueue.
+</Warning>
+
+## Benchmark pages
+
+<CardGroup cols={2}>
+  <Card title="Homonuclear diatomics" icon="atom" href="/benchmarks/homonuclear-diatomics">
+    Dissociation energy curves for all elemental homonuclear pairs.
+  </Card>
+  <Card title="Equation of state" icon="chart-line" href="/benchmarks/equation-of-state">
+    Bulk moduli and E-V curves for WBM bulk crystals.
+  </Card>
+  <Card title="Energy-volume scans" icon="wave-square" href="/benchmarks/energy-volume-scans">
+    Energy-volume profiles across the WBM dataset without structure relaxation.
+  </Card>
+  <Card title="MD Stability" icon="shield-check" href="/benchmarks/stability">
+    NVT/NPT simulation survival rate under heating and compression.
+  </Card>
+  <Card title="Combustion" icon="fire" href="/benchmarks/combustion">
+    Hydrogen combustion yield and reaction enthalpy from reactive MD.
+  </Card>
+</CardGroup>

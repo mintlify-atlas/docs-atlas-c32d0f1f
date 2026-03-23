@@ -1,0 +1,150 @@
+---
+title: 'PHONON — Phonon Calculation'
+description: 'Compute phonon dispersion, density of states, and thermal properties using Phonopy and an MLIP calculator.'
+---
+
+## Overview
+
+The `PHONON` task computes harmonic phonons by:
+
+1. Building a `Phonopy` object with supercell displacements.
+2. Evaluating forces on each displaced supercell using the supplied calculator.
+3. Producing force constants, mesh DOS, thermal properties, and an automatic band structure.
+
+The task is registered in Prefect as **`PHONON`** with a `TASK_SOURCE + INPUTS` cache policy.
+
+<Warning>
+  `phonopy` must be installed separately. Install it with:
+  ```bash
+  pip install phonopy
+  ```
+  or follow the [official instructions](https://phonopy.github.io/phonopy/install.html). The module will log a warning and fail at runtime if `phonopy` is not available.
+</Warning>
+
+## Function signature
+
+```python
+from mlip_arena.tasks.phonon import run as PHONON
+
+result = PHONON(
+    atoms,
+    calculator,
+    supercell_matrix=None,
+    min_lengths=None,
+    symprec=1e-5,
+    distance=0.01,
+    phonopy_kwargs={},
+    symmetry=False,
+    t_min=0.0,
+    t_max=1000.0,
+    t_step=10.0,
+    outdir=None,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  Primitive (or conventional) unit cell for which phonons are computed.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  ASE-compatible calculator used to evaluate forces on displaced supercells.
+</ParamField>
+
+<ParamField path="body.supercell_matrix" type="list[int] | None" default="None">
+  Supercell transformation matrix passed directly to `Phonopy`. When `None` and `min_lengths` is also `None`, Phonopy uses the primitive cell as the supercell. When `None` but `min_lengths` is set, the matrix is computed automatically.
+</ParamField>
+
+<ParamField path="body.min_lengths" type="number | tuple[number, number, number] | None" default="None">
+  Minimum supercell dimension(s) in Å. When provided, `supercell_matrix` is set to `diag(ceil(min_lengths / cell.lengths()))`. Ignored if `supercell_matrix` is given explicitly.
+</ParamField>
+
+<ParamField path="body.symprec" type="number" default="1e-5">
+  Symmetry precision in Å passed to Phonopy for space-group detection.
+</ParamField>
+
+<ParamField path="body.distance" type="number" default="0.01">
+  Atomic displacement distance in Å used to generate finite-difference supercell configurations (`Phonopy.generate_displacements`).
+</ParamField>
+
+<ParamField path="body.phonopy_kwargs" type="dict" default="{}">
+  Additional keyword arguments forwarded to the `Phonopy` constructor (e.g., `is_symmetry`, `factor`, `primitive_matrix`).
+</ParamField>
+
+<ParamField path="body.symmetry" type="boolean" default="false">
+  When `True`, symmetrizes force constants both generally and by space group after they are produced (`phonon.symmetrize_force_constants()` and `phonon.symmetrize_force_constants_by_space_group()`).
+</ParamField>
+
+<ParamField path="body.t_min" type="number" default="0.0">
+  Minimum temperature (K) for the thermal property calculation.
+</ParamField>
+
+<ParamField path="body.t_max" type="number" default="1000.0">
+  Maximum temperature (K) for the thermal property calculation.
+</ParamField>
+
+<ParamField path="body.t_step" type="number" default="10.0">
+  Temperature step size (K) between `t_min` and `t_max`.
+</ParamField>
+
+<ParamField path="body.outdir" type="string | None" default="None">
+  Directory path for writing output files. When set, the following files are saved:
+  - `<outdir>/band.yaml` — band structure data.
+  - `<outdir>/phonopy.yaml` — Phonopy object including force constants.
+  When `None`, no files are written.
+</ParamField>
+
+## Return value
+
+```python
+{"phonon": Phonopy}
+```
+
+<ResponseField name="phonon" type="phonopy.Phonopy">
+  A fully populated `Phonopy` object with force constants, mesh DOS, thermal properties, and band structure computed. Use the standard Phonopy API to extract further quantities:
+
+  ```python
+  phonon = result["phonon"]
+
+  # Thermal properties (free energy, entropy, heat capacity)
+  tp = phonon.get_thermal_properties_dict()
+
+  # Total DOS
+  dos = phonon.get_total_dos_dict()
+
+  # Band structure
+  band = phonon.get_band_structure_dict()
+  ```
+</ResponseField>
+
+## Example
+
+```python
+from ase.build import bulk
+from mlip_arena.tasks.phonon import run as PHONON
+from mlip_arena.models import load_calculator
+
+# Rock-salt MgO primitive cell
+atoms = bulk("MgO", "rocksalt", a=4.21)
+calculator = load_calculator("MACE-MP-0")
+
+result = PHONON(
+    atoms=atoms,
+    calculator=calculator,
+    min_lengths=15.0,   # ensure supercell dimensions >= 15 Å
+    symprec=1e-5,
+    distance=0.01,
+    symmetry=True,
+    t_min=0.0,
+    t_max=1200.0,
+    t_step=10.0,
+    outdir="./mgo_phonons",
+)
+
+phonon = result["phonon"]
+tp = phonon.get_thermal_properties_dict()
+print(tp["temperatures"])   # temperature array
+print(tp["free_energy"])    # in kJ/mol
+print(tp["heat_capacity"])  # in J/mol/K
+```

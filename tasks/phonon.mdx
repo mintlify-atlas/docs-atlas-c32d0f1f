@@ -1,0 +1,169 @@
+---
+title: "Phonons"
+description: "Calculate phonon band structures, density of states, and thermal properties using phonopy."
+---
+
+The `PHONON` task computes lattice dynamics properties by combining the finite-displacement method (implemented by [phonopy](https://phonopy.github.io/phonopy/)) with a force evaluation back-end provided by any ASE calculator.
+
+Given an input structure, the task:
+
+1. Constructs a supercell and generates symmetry-inequivalent displaced configurations.
+2. Evaluates forces on each displaced supercell using the supplied calculator.
+3. Assembles force constants and runs phonopy's post-processing pipeline to produce the phonon band structure, total DOS, and thermal properties.
+
+## Prerequisites
+
+phonopy must be installed separately:
+
+```bash
+pip install phonopy
+```
+
+If phonopy is missing, the import fails gracefully with a warning and `PHONON` will not be available.
+
+## Function signature
+
+```python
+from mlip_arena.tasks import PHONON
+
+result = PHONON(
+    atoms=atoms,
+    calculator=calc,
+    supercell_matrix=None,
+    min_lengths=None,
+    symprec=1e-5,
+    distance=0.01,
+    phonopy_kwargs={},
+    symmetry=False,
+    t_min=0.0,
+    t_max=1000.0,
+    t_step=10.0,
+    outdir=None,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  Primitive (or conventional) unit cell. The structure is passed as-is to phonopy; ensure it is fully relaxed before running PHONON.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator used to evaluate forces on each displaced supercell.
+</ParamField>
+
+<ParamField path="body.supercell_matrix" type="list[int] | None" default="None">
+  Supercell expansion matrix passed directly to `Phonopy`. Typically a 3-element list `[nx, ny, nz]` for a diagonal matrix, or a 3×3 list. If `None`, `min_lengths` is used to determine the matrix.
+</ParamField>
+
+<ParamField path="body.min_lengths" type="float | tuple[float, float, float] | None" default="None">
+  Minimum supercell lengths in Å along each axis. A diagonal supercell matrix is computed such that all supercell lengths exceed `min_lengths`. Ignored if `supercell_matrix` is provided.
+</ParamField>
+
+<ParamField path="body.symprec" type="number" default="1e-5">
+  Symmetry precision in Å passed to phonopy for space-group determination.
+</ParamField>
+
+<ParamField path="body.distance" type="number" default="0.01">
+  Atomic displacement distance in Å used to generate finite-difference configurations.
+</ParamField>
+
+<ParamField path="body.phonopy_kwargs" type="dict" default="{}">
+  Additional keyword arguments forwarded to the `Phonopy` constructor.
+</ParamField>
+
+<ParamField path="body.symmetry" type="boolean" default="false">
+  If `True`, symmetrizes the computed force constants using both `symmetrize_force_constants()` and `symmetrize_force_constants_by_space_group()`.
+</ParamField>
+
+<ParamField path="body.t_min" type="number" default="0.0">
+  Minimum temperature in K for thermal property calculations.
+</ParamField>
+
+<ParamField path="body.t_max" type="number" default="1000.0">
+  Maximum temperature in K for thermal property calculations.
+</ParamField>
+
+<ParamField path="body.t_step" type="number" default="10.0">
+  Temperature step in K for thermal property calculations.
+</ParamField>
+
+<ParamField path="body.outdir" type="str | None" default="None">
+  If provided, writes `band.yaml` and `phonopy.yaml` (with force constants) to this directory.
+</ParamField>
+
+## Return value
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `phonon` | `phonopy.Phonopy` | Fully populated `Phonopy` object with band structure, total DOS, and thermal properties attached |
+
+You can access results via the standard phonopy API:
+
+```python
+phonon = result["phonon"]
+
+# Band structure
+band = phonon.get_band_structure_dict()
+
+# Density of states
+dos = phonon.get_total_dos_dict()
+
+# Thermal properties (free energy, entropy, heat capacity)
+thermal = phonon.get_thermal_properties_dict()
+```
+
+## Example
+
+<Steps>
+  <Step title="Relax the structure first">
+    Always run structure optimization before computing phonons to avoid imaginary modes from residual forces.
+
+    ```python
+    from ase.build import bulk
+    from mlip_arena.tasks import OPT, PHONON
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    atoms = bulk("Si", "diamond", a=5.43)
+    calc = get_calculator(MLIPEnum.MACE_MP)
+
+    opt_result = OPT(
+        atoms=atoms,
+        calculator=calc,
+        filter="FrechetCell",
+        criterion={"fmax": 0.001},
+    )
+    relaxed = opt_result["atoms"]
+    ```
+  </Step>
+  <Step title="Run PHONON">
+    ```python
+    result = PHONON(
+        atoms=relaxed,
+        calculator=calc,
+        min_lengths=15.0,   # build supercell with all sides >= 15 Å
+        symprec=1e-5,
+        distance=0.01,
+        symmetry=True,
+        t_max=800.0,
+        outdir="phonon_output",
+    )
+    ```
+  </Step>
+  <Step title="Inspect results">
+    ```python
+    phonon = result["phonon"]
+    thermal = phonon.get_thermal_properties_dict()
+
+    temperatures = thermal["temperatures"]
+    free_energy  = thermal["free_energy"]   # kJ/mol
+    entropy      = thermal["entropy"]        # J/K/mol
+    heat_cap     = thermal["heat_capacity"] # J/K/mol
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+The PHONON task does not perform structure optimization internally. Pass a fully relaxed structure to avoid spurious imaginary phonon modes.
+</Warning>

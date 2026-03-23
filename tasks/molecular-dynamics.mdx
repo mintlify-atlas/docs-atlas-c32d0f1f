@@ -1,0 +1,251 @@
+---
+title: "Molecular dynamics"
+description: "Run NVE, NVT, or NPT molecular dynamics simulations with flexible temperature and pressure scheduling."
+---
+
+The `MD` task runs atomistic molecular dynamics (MD) using ASE dynamics integrators. It supports:
+
+- Three statistical ensembles: NVE, NVT, NPT
+- Multiple thermostat/barostat algorithms
+- Time-dependent temperature and pressure schedules (annealing, ramps, *etc.*)
+- Trajectory checkpointing and restart
+- Dispersion corrections via `TorchDFTD3Calculator`
+
+The implementation is adapted from the [Atomate2 MLFF MD workflow](https://github.com/materialsproject/atomate2).
+
+## Supported ensembles and dynamics
+
+| Ensemble | Dynamics string | ASE class |
+|----------|----------------|-----------|
+| `nve` | `velocityverlet` | `ase.md.verlet.VelocityVerlet` |
+| `nvt` | `langevin` | `ase.md.langevin.Langevin` |
+| `nvt` | `andersen` | `ase.md.andersen.Andersen` |
+| `nvt` | `berendsen` | `ase.md.nvtberendsen.NVTBerendsen` |
+| `nvt` | `nose-hoover` | `ase.md.npt.NPT` |
+| `npt` | `nose-hoover` | `ase.md.npt.NPT` |
+| `npt` | `berendsen` | `ase.md.nptberendsen.NPTBerendsen` |
+
+You can also pass any ASE `MolecularDynamics` class directly to `dynamics`.
+
+## Function signature
+
+```python
+from mlip_arena.tasks import MD
+
+result = MD(
+    atoms=atoms,
+    calculator=calc,
+    ensemble="nvt",
+    dynamics="langevin",
+    time_step=None,
+    total_time=1000,
+    temperature=300.0,
+    pressure=None,
+    dynamics_kwargs=None,
+    velocity_seed=None,
+    zero_linear_momentum=True,
+    zero_angular_momentum=True,
+    traj_file=None,
+    traj_interval=1,
+    restart=True,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  Atomic structure to simulate. A copy is made internally.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator for energy and force evaluations at each MD step.
+</ParamField>
+
+<ParamField path="body.ensemble" type="string" default="nvt">
+  Statistical ensemble. One of `"nve"`, `"nvt"`, or `"npt"`.
+</ParamField>
+
+<ParamField path="body.dynamics" type="str | MolecularDynamics" default="langevin">
+  Dynamics integrator. Accepts a string (see table above) or an ASE `MolecularDynamics` class. The string must be valid for the chosen `ensemble`.
+</ParamField>
+
+<ParamField path="body.time_step" type="number | None" default="None">
+  Integration time step in femtoseconds. Defaults to `0.5 fs` if hydrogen is present, otherwise `2.0 fs`.
+</ParamField>
+
+<ParamField path="body.total_time" type="number" default="1000">
+  Total simulation time in femtoseconds. The number of steps is `int(total_time / time_step)`.
+</ParamField>
+
+<ParamField path="body.temperature" type="float | Sequence | ndarray | None" default="300.0">
+  Target temperature in Kelvin. Can be:
+  - A scalar for a constant temperature.
+  - A sequence of values for a temperature schedule (linearly interpolated over the simulation).
+  - Ignored for NVE.
+</ParamField>
+
+<ParamField path="body.pressure" type="float | Sequence | ndarray | None" default="None">
+  Target pressure in eV/Å³ for NPT simulations. Can be a scalar or a sequence. Ignored for NVE and NVT.
+</ParamField>
+
+<ParamField path="body.dynamics_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the ASE dynamics constructor. For Langevin, the default friction is `10.0 × 10⁻³ / fs` (10 ps⁻¹) if not provided.
+</ParamField>
+
+<ParamField path="body.velocity_seed" type="integer | None" default="None">
+  Random seed for Maxwell-Boltzmann velocity initialization. Set for reproducible simulations.
+</ParamField>
+
+<ParamField path="body.zero_linear_momentum" type="boolean" default="true">
+  Remove the total linear momentum from the initial velocity distribution.
+</ParamField>
+
+<ParamField path="body.zero_angular_momentum" type="boolean" default="true">
+  Remove the total angular momentum from the initial velocity distribution.
+</ParamField>
+
+<ParamField path="body.traj_file" type="str | Path | None" default="None">
+  Path to an ASE `.traj` file for saving simulation frames. Parent directories are created automatically.
+</ParamField>
+
+<ParamField path="body.traj_interval" type="integer" default="1">
+  Write a frame to `traj_file` every this many steps.
+</ParamField>
+
+<ParamField path="body.restart" type="boolean" default="true">
+  If `True` and `traj_file` exists, resume the simulation from the last frame. Velocity and position information are restored from the trajectory.
+</ParamField>
+
+## Return value
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `atoms` | `ase.Atoms` | Final structure after the simulation |
+| `runtime` | `datetime.timedelta` | Wall-clock time of the simulation |
+| `n_steps` | `int` | Number of MD steps executed |
+
+## Examples
+
+<Tabs>
+  <Tab title="NVE">
+    ```python
+    from ase.build import bulk
+    from mlip_arena.tasks import MD
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    atoms = bulk("Cu", "fcc", a=3.6) * (5, 5, 5)
+    calc = get_calculator(MLIPEnum.MACE_MP)
+
+    result = MD(
+        atoms=atoms,
+        calculator=calc,
+        ensemble="nve",
+        dynamics="velocityverlet",
+        total_time=1000,   # 1 ps
+        time_step=2.0,     # fs
+        velocity_seed=42,
+    )
+
+    print(f"Steps: {result['n_steps']}")
+    print(f"Runtime: {result['runtime']}")
+    ```
+  </Tab>
+  <Tab title="NVT (Langevin)">
+    ```python
+    from ase.build import bulk
+    from mlip_arena.tasks import MD
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    atoms = bulk("Cu", "fcc", a=3.6) * (5, 5, 5)
+    calc = get_calculator(MLIPEnum.MACE_MP)
+
+    result = MD(
+        atoms=atoms,
+        calculator=calc,
+        ensemble="nvt",
+        dynamics="langevin",
+        total_time=5000,      # 5 ps
+        time_step=2.0,
+        temperature=300.0,    # K
+        traj_file="cu_nvt.traj",
+        traj_interval=10,
+    )
+    ```
+  </Tab>
+  <Tab title="NVT with annealing schedule">
+    ```python
+    import numpy as np
+    from ase.build import bulk
+    from mlip_arena.tasks import MD
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    atoms = bulk("Cu", "fcc", a=3.6) * (5, 5, 5)
+    calc = get_calculator(MLIPEnum.MACE_MP)
+
+    # Ramp from 300 K to 1000 K and back
+    schedule = [300, 1000, 300]
+
+    result = MD(
+        atoms=atoms,
+        calculator=calc,
+        ensemble="nvt",
+        dynamics="langevin",
+        total_time=9000,
+        time_step=1.0,
+        temperature=schedule,
+    )
+    ```
+  </Tab>
+  <Tab title="With dispersion">
+    ```python
+    from ase import units
+    from ase.build import bulk
+    from mlip_arena.tasks import MD
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    calc = get_calculator(
+        MLIPEnum.MACE_MP,
+        dispersion=True,
+        dispersion_kwargs=dict(
+            damping="bj",
+            xc="pbe",
+            cutoff=40.0 * units.Bohr,
+        ),
+    )
+
+    atoms = bulk("Cu", "fcc", a=3.6) * (5, 5, 5)
+
+    result = MD(
+        atoms=atoms,
+        calculator=calc,
+        ensemble="nvt",
+        dynamics="langevin",
+        total_time=1000,
+        temperature=300.0,
+    )
+    ```
+  </Tab>
+</Tabs>
+
+## Temperature and pressure scheduling
+
+Pass a list of values to `temperature` (or `pressure` for NPT) to define a piecewise schedule. The values are linearly interpolated over the total number of steps.
+
+```python
+# Slow anneal from 300 K → 800 K → 300 K
+temperature = [300, 800, 300]
+```
+
+The thermostat set-point is updated at every step via a callback, so the actual temperature tracks the schedule continuously.
+
+## Trajectory checkpointing
+
+When `traj_file` is set and `restart=True`, the task detects an existing trajectory and continues from the last saved frame. This allows long simulations to be interrupted and resumed without losing progress.
+
+<Note>
+For NPT simulations, ASE requires an upper-triangular cell. The task automatically applies a Schur decomposition to transform the cell before initializing the dynamics.
+</Note>

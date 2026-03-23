@@ -1,0 +1,251 @@
+---
+title: 'NEB — Nudged Elastic Band'
+description: 'Compute minimum energy paths and energy barriers using the nudged elastic band method with ASE.'
+---
+
+## Overview
+
+This module provides two Prefect tasks for NEB calculations:
+
+| Task | Function | Use when |
+|------|----------|----------|
+| **NEB from images** | `run` | You already have a list of interpolated or partially relaxed images |
+| **NEB from endpoints** | `run_from_endpoints` | You have only start and end structures; the task handles interpolation and optional endpoint relaxation |
+
+Both tasks use a `TASK_SOURCE + INPUTS` cache policy.
+
+## `run` — NEB from images
+
+### Function signature
+
+```python
+from mlip_arena.tasks.neb import run as NEB
+
+result = NEB(
+    images,
+    calculator,
+    optimizer="MDMin",
+    optimizer_kwargs=None,
+    criterion=None,
+    interpolation="idpp",
+    climb=True,
+    traj_file=None,
+)
+```
+
+### Parameters
+
+<ParamField path="body.images" type="list[ase.Atoms]" required>
+  Ordered list of `Atoms` objects representing the NEB images (including the two endpoint images). Each image is copied internally; the originals are not mutated.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator attached to every image via `allow_shared_calculator=True`.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="MDMin">
+  NEB optimizer class or string name. `"BFGSLineSearch"` is **not** supported for NEB. Accepted strings:
+  `"MDMin"`, `"FIRE"`, `"FIRE2"`, `"LBFGS"`, `"LBFGSLineSearch"`,
+  `"BFGS"`, `"QuasiNewton"`, `"GPMin"`, `"CellAwareBFGS"`, `"ODE12r"`.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criteria passed to `optimizer.run()`. When `None`, the ASE optimizer default is used (no step limit). Typical key: `fmax` (eV/Å).
+</ParamField>
+
+<ParamField path="body.interpolation" type="string" default="idpp">
+  Initial path interpolation method applied before optimization:
+
+  | Value | Description |
+  |-------|-------------|
+  | `"linear"` | Linear interpolation of Cartesian coordinates between endpoints |
+  | `"idpp"` | Image Dependent Pair Potential — produces smoother initial paths and typically converges faster |
+</ParamField>
+
+<ParamField path="body.climb" type="boolean" default="true">
+  Enable the climbing-image variant of NEB (CI-NEB). When `True`, the highest-energy image climbs toward the true saddle point, giving a more accurate barrier estimate.
+</ParamField>
+
+<ParamField path="body.traj_file" type="string | Path | None" default="None">
+  Path for writing NEB optimization trajectory. Passed directly to the optimizer constructor.
+</ParamField>
+
+## `run_from_endpoints` — NEB from endpoints
+
+### Function signature
+
+```python
+from mlip_arena.tasks.neb import run_from_endpoints as NEB_FROM_ENDPOINTS
+
+result = NEB_FROM_ENDPOINTS(
+    start,
+    end,
+    n_images,
+    calculator,
+    optimizer="BFGS",
+    optimizer_kwargs=None,
+    criterion=None,
+    relax_end_points=True,
+    interpolation="idpp",
+    climb=True,
+    traj_file=None,
+    cache_subtasks=False,
+)
+```
+
+### Parameters
+
+<ParamField path="body.start" type="ase.Atoms" required>
+  Initial state (reactant) structure.
+</ParamField>
+
+<ParamField path="body.end" type="ase.Atoms" required>
+  Final state (product) structure.
+</ParamField>
+
+<ParamField path="body.n_images" type="number" required>
+  Total number of images in the NEB path, **including** the two endpoint images.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator used for endpoint relaxations and the NEB optimization.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGS">
+  Optimizer used for **both** endpoint relaxations and the NEB run. See `run` for accepted string values.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criteria passed to `optimizer.run()`.
+</ParamField>
+
+<ParamField path="body.relax_end_points" type="boolean" default="true">
+  When `True`, both `start` and `end` are individually relaxed with OPT before the NEB path is constructed. Recommended to ensure the endpoints sit at true local minima.
+</ParamField>
+
+<ParamField path="body.interpolation" type="string" default="idpp">
+  Interpolation method for generating intermediate images. See `run` for options.
+</ParamField>
+
+<ParamField path="body.climb" type="boolean" default="true">
+  Enable climbing-image NEB.
+</ParamField>
+
+<ParamField path="body.traj_file" type="string | Path | None" default="None">
+  Path for writing NEB optimization trajectory.
+</ParamField>
+
+<ParamField path="body.cache_subtasks" type="boolean" default="false">
+  When `True`, results from the endpoint OPT sub-tasks and the inner NEB `run` are cached and persisted. When `False`, sub-tasks always recompute.
+</ParamField>
+
+## Differences between `run` and `run_from_endpoints`
+
+| | `run` | `run_from_endpoints` |
+|--|-------|----------------------|
+| Input | Pre-built image list | Start + end `Atoms` only |
+| Endpoint relaxation | Your responsibility | Automatic (controllable via `relax_end_points`) |
+| Path construction | You provide images | Uses pymatgen `Structure.interpolate` with `autosort_tol=0.5` |
+| Sub-task caching | N/A | Controlled by `cache_subtasks` |
+| Default optimizer | `"MDMin"` | `"BFGS"` |
+
+## Return value
+
+Both functions return the same structure:
+
+```python
+{
+    "barrier":  tuple,      # (forward_barrier_eV, reverse_barrier_eV)
+    "images":   list[Atoms],# optimized NEB images
+    "forcefit": object,     # result of ase.utils.forcecurve.fit_images
+}
+```
+
+<ResponseField name="barrier" type="tuple[float, float]">
+  Energy barriers returned by `NEBTools.get_barrier()`: `(forward_barrier_eV, reverse_barrier_eV)`.
+</ResponseField>
+
+<ResponseField name="images" type="list[ase.Atoms]">
+  The fully optimized NEB images in path order.
+</ResponseField>
+
+<ResponseField name="forcefit" type="object">
+  Spline fit object from `ase.utils.forcecurve.fit_images`, useful for plotting the energy profile.
+</ResponseField>
+
+<Note>
+  If the initial relaxation of endpoints fails, `run_from_endpoints` returns a Prefect `State` object instead of a dict.
+</Note>
+
+## Examples
+
+<Tabs>
+  <Tab title="NEB from images">
+```python
+from ase.build import fcc100, add_adsorbate
+from ase.constraints import FixAtoms
+from mlip_arena.tasks.neb import run as NEB
+from mlip_arena.models import load_calculator
+
+calculator = load_calculator("MACE-MP-0")
+
+# Build initial and final images manually
+initial = fcc100("Al", size=(2, 2, 3))
+final = initial.copy()
+# ... modify final to represent the product state ...
+
+images = [initial.copy() for _ in range(7)]  # 5 intermediate + 2 endpoints
+
+result = NEB(
+    images=images,
+    calculator=calculator,
+    optimizer="FIRE",
+    criterion={"fmax": 0.05},
+    interpolation="idpp",
+    climb=True,
+    traj_file="neb.traj",
+)
+
+forward_barrier, reverse_barrier = result["barrier"]
+print(f"Forward barrier: {forward_barrier:.3f} eV")
+```
+  </Tab>
+  <Tab title="NEB from endpoints">
+```python
+from ase.build import bulk
+from mlip_arena.tasks.neb import run_from_endpoints as NEB_FROM_ENDPOINTS
+from mlip_arena.models import load_calculator
+
+calculator = load_calculator("MACE-MP-0")
+
+# Vacancy migration in FCC copper
+initial = bulk("Cu", "fcc", a=3.6).repeat(3)
+final = initial.copy()
+# ... define different vacancy position in final ...
+
+result = NEB_FROM_ENDPOINTS(
+    start=initial,
+    end=final,
+    n_images=7,
+    calculator=calculator,
+    optimizer="BFGS",
+    criterion={"fmax": 0.05},
+    relax_end_points=True,
+    interpolation="idpp",
+    climb=True,
+)
+
+forward_barrier, reverse_barrier = result["barrier"]
+print(f"Forward barrier: {forward_barrier:.3f} eV")
+print(f"Reverse barrier: {reverse_barrier:.3f} eV")
+```
+  </Tab>
+</Tabs>

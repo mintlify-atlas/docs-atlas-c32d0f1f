@@ -1,0 +1,120 @@
+---
+title: "Tasks overview"
+description: "Modular, Prefect-powered computational tasks for benchmarking MLIPs."
+---
+
+Tasks are the core building blocks of MLIP Arena. Each task wraps a well-defined atomistic simulation — such as structure optimization or molecular dynamics — as a [Prefect](https://docs.prefect.io/) task, giving you automatic caching, parallel execution, and composability with no extra boilerplate.
+
+## Available tasks
+
+<Columns cols={2}>
+  <Card title="Structure optimization" icon="arrow-down-to-line" href="/tasks/structure-optimization">
+    Relax atomic positions and/or cell parameters to a local energy minimum.
+  </Card>
+  <Card title="Equation of state" icon="chart-line" href="/tasks/equation-of-state">
+    Compute the energy-volume curve and fit a Birch-Murnaghan EOS to extract bulk modulus.
+  </Card>
+  <Card title="Molecular dynamics" icon="wave-sine" href="/tasks/molecular-dynamics">
+    Run NVE, NVT, or NPT simulations with flexible temperature and pressure schedules.
+  </Card>
+  <Card title="Phonons" icon="music" href="/tasks/phonon">
+    Calculate phonon band structures, DOS, and thermal properties via phonopy.
+  </Card>
+  <Card title="Nudged elastic band" icon="route" href="/tasks/neb">
+    Find minimum-energy paths and transition-state barriers between two structures.
+  </Card>
+  <Card title="Elasticity" icon="cube" href="/tasks/elasticity">
+    Compute the full elastic tensor and derived moduli from finite-strain deformations.
+  </Card>
+</Columns>
+
+## Importing tasks
+
+All tasks are importable from the top-level `mlip_arena.tasks` package:
+
+```python
+from mlip_arena.tasks import OPT, EOS, MD, PHONON, NEB, NEB_FROM_ENDPOINTS, ELASTICITY
+```
+
+Alternatively, import from each sub-module:
+
+```python
+from mlip_arena.tasks.optimize import run as OPT
+from mlip_arena.tasks.eos     import run as EOS
+from mlip_arena.tasks.md      import run as MD
+from mlip_arena.tasks.phonon  import run as PHONON
+from mlip_arena.tasks.neb     import run as NEB, run_from_endpoints as NEB_FROM_ENDPOINTS
+from mlip_arena.tasks.elasticity import run as ELASTICITY
+```
+
+<Note>
+`PHONON` requires [phonopy](https://phonopy.github.io/phonopy/install.html). If phonopy is not installed, the import falls back gracefully and logs a warning.
+</Note>
+
+## Caching and Prefect integration
+
+Every task is decorated with `@task(cache_policy=TASK_SOURCE + INPUTS)`. This means:
+
+- **Automatic caching** — if you call a task with the same inputs and the task source code has not changed, Prefect returns the cached result instantly.
+- **Parallel execution** — call `.submit()` instead of calling the task directly to dispatch it as a non-blocking future.
+- **Composability** — tasks can call other tasks. For example, `EOS` internally submits multiple `OPT` tasks concurrently.
+
+## General usage pattern
+
+Every task follows the same pattern:
+
+<Steps>
+  <Step title="Build or load an ASE Atoms object">
+    ```python
+    from ase.build import bulk
+    atoms = bulk("Cu", "fcc", a=3.6)
+    ```
+  </Step>
+  <Step title="Instantiate a calculator">
+    Use `get_calculator` from `mlip_arena.tasks.utils` to load any registered MLIP, or pass any ASE `BaseCalculator` directly.
+
+    ```python
+    from mlip_arena.models import MLIPEnum
+    from mlip_arena.tasks.utils import get_calculator
+
+    calc = get_calculator(MLIPEnum.MACE_MP)
+    ```
+  </Step>
+  <Step title="Call the task">
+    ```python
+    result = OPT(atoms=atoms, calculator=calc)
+    print(result["atoms"].get_potential_energy())
+    ```
+  </Step>
+  <Step title="(Optional) Run in parallel inside a flow">
+    ```python
+    from prefect import flow
+    from mlip_arena.tasks import MD
+
+    @flow
+    def benchmark():
+        futures = [
+            MD.submit(atoms=atoms, calculator=get_calculator(m))
+            for m in MLIPEnum
+        ]
+        return [f.result(raise_on_failure=False) for f in futures]
+
+    benchmark()
+    ```
+  </Step>
+</Steps>
+
+## Dispersion corrections
+
+All tasks accept a pre-built ASE calculator, so dispersion corrections (e.g. DFT-D3 via `torch_dftd`) can be applied by composing calculators before passing them in:
+
+```python
+from mlip_arena.tasks.utils import get_calculator
+from ase import units
+
+calc = get_calculator(
+    "MACE_MP",
+    dispersion=True,
+    dispersion_kwargs=dict(damping="bj", xc="pbe", cutoff=40.0 * units.Bohr),
+)
+```

@@ -1,0 +1,145 @@
+---
+title: "Contributing to MLIP Arena"
+description: "How to contribute new models, benchmarks, and improvements to MLIP Arena."
+---
+
+MLIP Arena is an open, community-driven benchmark platform. Contributions of new models, benchmarks, bug fixes, and improvements are welcome.
+
+## Two main ways to contribute
+
+<CardGroup cols={2}>
+  <Card title="Add a new model" icon="brain" href="/contributing/add-model">
+    Register a pretrained MLIP so it participates in all existing and future benchmarks automatically.
+  </Card>
+  <Card title="Add a new benchmark" icon="flask" href="/contributing/add-benchmark">
+    Design a new benchmark task that tests a physical property or failure mode not yet covered.
+  </Card>
+</CardGroup>
+
+You can also contribute bug fixes, documentation improvements, and infrastructure changes through a standard pull request.
+
+## Code quality standards
+
+### Linting
+
+MLIP Arena uses [ruff](https://docs.astral.sh/ruff/) for linting and formatting. Before submitting a PR, run:
+
+```bash
+ruff check .
+ruff format .
+```
+
+The CI pipeline enforces ruff checks on every push and pull request.
+
+### Testing
+
+Tests live in the `tests/` directory and are run with [pytest](https://docs.pytest.org/):
+
+```
+tests/
+  test_app.py
+  test_elasticity.py
+  test_eos.py
+  test_external_calculators.py
+  test_internal_calculators.py
+  test_md.py
+  test_mof.py
+  test_neb.py
+```
+
+Run tests locally before submitting:
+
+```bash
+pytest -vra -n 5 --dist=loadscope tests
+```
+
+All new models should pass `tests/test_external_calculators.py`. New benchmark tasks should include a corresponding test file.
+
+<Note>
+  The test suite runs across Python 3.10, 3.11, and 3.12 in CI. Make sure your code is compatible with all three versions.
+</Note>
+
+## How to fork and submit a PR
+
+<Steps>
+  <Step title="Fork and clone the repository">
+    Fork [atomind-ai/mlip-arena](https://github.com/atomind-ai/mlip-arena) on GitHub, then clone your fork:
+
+    ```bash
+    git clone https://github.com/<your-username>/mlip-arena.git
+    cd mlip-arena
+    ```
+  </Step>
+
+  <Step title="Set up the development environment">
+    Use the provided installation script for a clean environment with `uv`:
+
+    ```bash
+    # Install uv (fast pip alternative)
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    source $HOME/.local/bin/env
+
+    # One-script installation (Linux)
+    bash scripts/install.sh
+
+    # macOS
+    bash scripts/install-macosx.sh
+    ```
+
+    <Warning>
+      Install in a fresh virtual environment. Several popular MLIPs have conflicting dependencies that can break each other when installed together.
+    </Warning>
+  </Step>
+
+  <Step title="Create a feature branch">
+    ```bash
+    git checkout -b feat/my-model-or-benchmark
+    ```
+  </Step>
+
+  <Step title="Make your changes">
+    Follow the guides for [adding a model](/contributing/add-model) or [adding a benchmark](/contributing/add-benchmark). Run linting and tests locally before proceeding.
+  </Step>
+
+  <Step title="Push and open a pull request">
+    ```bash
+    git push origin feat/my-model-or-benchmark
+    ```
+
+    Open a pull request against the `main` branch of `atomind-ai/mlip-arena`. Describe what you added or changed, and link any relevant issues or papers.
+  </Step>
+</Steps>
+
+## GitHub Actions CI/CD pipeline
+
+Every push and pull request triggers the following automated pipeline:
+
+| Workflow | File | Trigger |
+|---|---|---|
+| Python Test | `test.yaml` | Push and PR to `main` |
+| Sync to Hugging Face | `sync-hf.yaml` | After `Python Test` succeeds on `main` |
+| Release | `release.yaml` | Manual / tag |
+
+**Python Test** (`test.yaml`) runs on Ubuntu across Python 3.10, 3.11, and 3.12. It installs all dependencies, logs in to Hugging Face to fetch model checkpoints, runs the full pytest suite in parallel, and performs a trial push to the Hugging Face Space to verify compatibility.
+
+**Sync to Hugging Face** (`sync-hf.yaml`) runs only after the test workflow succeeds on `main`. It squashes history and force-pushes to the [Hugging Face Space](https://huggingface.co/spaces/atomind/mlip-arena), making the live leaderboard reflect the latest state of the repository.
+
+<Note>
+  PRs that fail CI will not be merged. Check the Actions tab in your PR to diagnose failures.
+</Note>
+
+## Finding outstanding tasks
+
+The [GitHub project page](https://github.com/orgs/atomind-ai/projects/1) tracks outstanding tasks, known issues, and planned features. Look there for issues labeled `good first issue` or `help wanted` if you are looking for a place to start.
+
+## Discussing new ideas
+
+Before investing significant time in a new benchmark or major feature, open a thread in [GitHub Discussions](https://github.com/atomind-ai/mlip-arena/discussions/new?category=ideas) to propose the idea and get feedback from maintainers and other contributors.
+
+## License
+
+MLIP Arena is released under the [Apache-2.0 license](https://github.com/atomind-ai/mlip-arena/blob/main/LICENSE). By contributing, you agree that your contributions will be licensed under the same terms.
+
+<Note>
+  Individual models registered in MLIP Arena may carry their own licenses (MIT, BSD-3-Clause, GPL-3.0, etc.). Check the `license` field in `mlip_arena/models/registry.yaml` for each model.
+</Note>

@@ -1,0 +1,214 @@
+---
+title: "Nudged elastic band"
+description: "Find minimum-energy transition paths and energy barriers between two structures using the nudged elastic band (NEB) method."
+---
+
+MLIP Arena provides two NEB tasks:
+
+- **`NEB`** — takes a pre-built list of images (initial, intermediate, and final structures).
+- **`NEB_FROM_ENDPOINTS`** — takes only the start and end structures, automatically relaxes them, interpolates intermediate images, then runs NEB.
+
+Both tasks use ASE's NEB implementation and support the climbing-image NEB (CI-NEB) algorithm.
+
+The implementation is adapted from [MatCalc](https://github.com/materialsvirtuallab/matcalc).
+
+## NEB (from images)
+
+Use this task when you already have a full image list, for example from a prior interpolation or a previous NEB run.
+
+### Function signature
+
+```python
+from mlip_arena.tasks import NEB
+
+result = NEB(
+    images=images,
+    calculator=calc,
+    optimizer="MDMin",
+    optimizer_kwargs=None,
+    criterion=None,
+    interpolation="idpp",
+    climb=True,
+    traj_file=None,
+)
+```
+
+### Parameters
+
+<ParamField path="body.images" type="list[ase.Atoms]" required>
+  Ordered list of `Atoms` objects representing the NEB path. Must include at least the start and end images. Intermediate images will be interpolated in-place.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator assigned to every image. A shared calculator is used (`allow_shared_calculator=True`).
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="MDMin">
+  Optimizer for the NEB path. Accepts a class or one of: `"MDMin"`, `"FIRE"`, `"FIRE2"`, `"LBFGS"`, `"LBFGSLineSearch"`, `"BFGS"`, `"QuasiNewton"`, `"GPMin"`, `"CellAwareBFGS"`, `"ODE12r"`.
+
+  <Note>`"BFGSLineSearch"` is not supported for NEB calculations.</Note>
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="{}">
+  Convergence criterion dict forwarded to `optimizer.run()` (e.g. `{"fmax": 0.05}`).
+</ParamField>
+
+<ParamField path="body.interpolation" type="string" default="idpp">
+  Interpolation method for intermediate images. One of:
+  - `"idpp"` — Image Dependent Pair Potential (recommended, produces smoother paths)
+  - `"linear"` — simple linear interpolation of atomic positions
+</ParamField>
+
+<ParamField path="body.climb" type="boolean" default="true">
+  Enable the climbing-image NEB algorithm. The image with the highest energy climbs toward the true saddle point.
+</ParamField>
+
+<ParamField path="body.traj_file" type="str | Path | None" default="None">
+  Path to save the NEB trajectory. Passed directly to the optimizer.
+</ParamField>
+
+### Return value
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `barrier` | `tuple` | `(forward_barrier, reverse_barrier)` in eV from `NEBTools.get_barrier()` |
+| `images` | `list[ase.Atoms]` | Final NEB images |
+| `forcefit` | object | Spline fit object from `ase.utils.forcecurve.fit_images`, useful for plotting |
+
+---
+
+## NEB from endpoints
+
+Use this task when you only have the start and end structures. It handles endpoint relaxation and image interpolation automatically.
+
+### Function signature
+
+```python
+from mlip_arena.tasks import NEB_FROM_ENDPOINTS
+
+result = NEB_FROM_ENDPOINTS(
+    start=start_atoms,
+    end=end_atoms,
+    n_images=7,
+    calculator=calc,
+    optimizer="BFGS",
+    optimizer_kwargs=None,
+    criterion=None,
+    relax_end_points=True,
+    interpolation="idpp",
+    climb=True,
+    traj_file=None,
+    cache_subtasks=False,
+)
+```
+
+### Parameters
+
+<ParamField path="body.start" type="ase.Atoms" required>
+  Initial endpoint structure.
+</ParamField>
+
+<ParamField path="body.end" type="ase.Atoms" required>
+  Final endpoint structure.
+</ParamField>
+
+<ParamField path="body.n_images" type="integer" required>
+  Total number of images in the NEB path, including the start and end images.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator for energy and force evaluations.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGS">
+  Optimizer for endpoint relaxation and the NEB run. See `NEB` for valid values.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criterion for both endpoint relaxations and the NEB run.
+</ParamField>
+
+<ParamField path="body.relax_end_points" type="boolean" default="true">
+  If `True`, runs `OPT` on both `start` and `end` before interpolating.
+</ParamField>
+
+<ParamField path="body.interpolation" type="string" default="idpp">
+  Interpolation method. One of `"linear"` or `"idpp"`.
+</ParamField>
+
+<ParamField path="body.climb" type="boolean" default="true">
+  Enable climbing-image NEB.
+</ParamField>
+
+<ParamField path="body.traj_file" type="str | Path | None" default="None">
+  Path to save the NEB trajectory.
+</ParamField>
+
+<ParamField path="body.cache_subtasks" type="boolean" default="false">
+  If `True`, results from internal `OPT` and `NEB` sub-tasks are cached in Prefect's result store.
+</ParamField>
+
+### Return value
+
+Same as `NEB` above.
+
+---
+
+## Example
+
+<Steps>
+  <Step title="Define start and end structures">
+    ```python
+    from ase.build import fcc111, add_adsorbate
+    from ase import Atoms
+
+    # Example: H atom hopping between two hollow sites on Cu(111)
+    from mlip_arena.tasks import NEB_FROM_ENDPOINTS
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    calc = get_calculator(MLIPEnum.MACE_MP)
+    ```
+  </Step>
+  <Step title="Run NEB from endpoints">
+    ```python
+    result = NEB_FROM_ENDPOINTS(
+        start=start_atoms,
+        end=end_atoms,
+        n_images=7,
+        calculator=calc,
+        relax_end_points=True,
+        interpolation="idpp",
+        climb=True,
+        criterion={"fmax": 0.05},
+        traj_file="neb.traj",
+    )
+    ```
+  </Step>
+  <Step title="Inspect barrier">
+    ```python
+    forward_barrier, reverse_barrier = result["barrier"]
+    print(f"Forward barrier:  {forward_barrier:.3f} eV")
+    print(f"Reverse barrier: {reverse_barrier:.3f} eV")
+    ```
+  </Step>
+</Steps>
+
+## Interpolation methods
+
+| Method | Description |
+|--------|-------------|
+| `"linear"` | Linearly interpolates Cartesian positions between start and end. Fast but may produce high-energy initial guesses. |
+| `"idpp"` | Image Dependent Pair Potential interpolation. Minimizes changes in interatomic distances and typically yields smoother, more physical paths. Recommended for most cases. |
+
+<Tip>
+For complex migration events (e.g. involving significant bond breaking), start with `"idpp"` and verify the path makes physical sense before converging the NEB.
+</Tip>

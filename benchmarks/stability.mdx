@@ -1,0 +1,119 @@
+---
+title: "MD stability"
+description: "Testing MLIP survival rate and inference speed under NVT heating and NPT compression ramps on RM24 crystal structures."
+---
+
+## Physical motivation
+
+Running molecular dynamics simulations at elevated temperatures or pressures is one of the most demanding practical uses of an MLIP. A model that looks good on static benchmarks can fail catastrophically in MD — producing unbounded forces, violating energy conservation, or crashing within picoseconds of simulation time.
+
+This benchmark quantifies **simulation survival rate**: what fraction of MD runs does a model complete without failing? It also measures **inference speed** (steps per second as a function of system size), which determines the practical cost of using a model for long-timescale simulations.
+
+Two protocols are tested:
+
+- **Heating (NVT)** — isochoric-isothermal molecular dynamics with a temperature ramp from 300 K to 3000 K over 10 ps
+- **Compression (NPT)** — isothermal-isobaric molecular dynamics with simultaneous temperature (300 K → 3000 K) and pressure (0 GPa → 500 GPa) ramps over 10 ps
+
+The compression protocol is particularly demanding because it requires the barostat to adjust the cell volume while the thermostat ramps the temperature. Models that lack robust NPT integration or produce unphysical stresses under high pressure fail quickly.
+
+## Structures tested
+
+Simulations are run on structures from the **RM24 dataset**, which contains a diverse set of inorganic crystal structures spanning multiple chemical families.
+
+## Temperature and pressure ranges
+
+| Protocol | Ensemble | Temperature range | Pressure range | Duration |
+|----------|----------|------------------|----------------|----------|
+| Heating | NVT (Nosé-Hoover) | 300 K → 3000 K | N/A | 10 ps |
+| Compression | NPT (Nosé-Hoover) | 300 K → 3000 K | 0 → 500 GPa | 10 ps |
+
+<Warning>
+  Not all models support NPT dynamics. `eqV2(OMat)`, `EquiformerV2(OC22)`, `EquiformerV2(OC20)`, and `eSCN(OC20)` have `npt: false` in the registry due to known issues with stress tensor computation.
+</Warning>
+
+## Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Valid runs (%) | Percentage of simulations that complete the full duration without crashing |
+| Normalized final step | Final simulation step divided by total target steps — a continuous survival proxy |
+| Steps per second | MD throughput as a function of number of atoms (log-log scale) |
+| Power-law scaling exponent | Fitted exponent n where steps/s ∝ N⁻ⁿ — measures how throughput degrades with system size |
+
+The survival plot on the leaderboard shows cumulative valid runs as a function of normalized simulation time. A model that crashes early shows a steep drop in the cumulative curve; a robust model stays near 100% throughout.
+
+<Info>
+  Inference speed is measured and plotted on a log-log scale with power-law fits. The exponent n reflects the model's scaling with system size — lower n means better scalability to large systems.
+</Info>
+
+## Model support
+
+The following models have results for the stability benchmark. Support requires the `gpu-tasks: stability` entry and, for NPT, `npt: true` in the model registry.
+
+| Model | NVT support | NPT support | Training data |
+|-------|-------------|-------------|---------------|
+| MACE-MP(M) | Yes | Yes | MPTrj |
+| MACE-MPA | Yes | Yes | MPTrj, Alexandria |
+| CHGNet | Yes | Yes | MPTrj |
+| M3GNet | Yes | Yes | MPF |
+| MatterSim | Yes | Yes | MPTrj, Alexandria |
+| ORBv2 | Yes | Yes | MPTrj, Alexandria |
+| ORB | Yes | Yes | MPTrj, Alexandria |
+| SevenNet | Yes | Yes | MPTrj |
+
+## How to run
+
+Two Jupyter notebooks orchestrate the benchmark runs:
+
+- `benchmarks/stability/temperature.ipynb` — NVT heating runs
+- `benchmarks/stability/pressure.ipynb` — NPT compression runs
+
+Both notebooks use Prefect flows backed by Dask-JobQueue for parallel dispatch to SLURM.
+
+<Steps>
+  <Step title="Configure SLURM">
+    Edit the cluster settings in `benchmarks/stability/run.py`. The default allocates 4 GPUs per node with a 4-hour wall time.
+
+    ```python
+    cluster_kwargs = dict(
+        cores=1,
+        memory="64 GB",
+        account="your-account",
+        walltime="04:00:00",
+    )
+    cluster = SLURMCluster(**cluster_kwargs)
+    cluster.adapt(minimum_jobs=10, maximum_jobs=50)
+    ```
+  </Step>
+  <Step title="Run heating simulations">
+    Open and run `benchmarks/stability/temperature.ipynb`. Results are saved as `<model>-heating.parquet` files in `benchmarks/stability/<family>/`.
+  </Step>
+  <Step title="Run compression simulations">
+    Open and run `benchmarks/stability/pressure.ipynb`. Results are saved as `<model>-compression.parquet` files.
+  </Step>
+  <Step title="Analyze results">
+    Open `benchmarks/stability/plot.ipynb` to generate the survival and speed-scaling figures.
+
+    Alternatively, run the analysis script directly:
+
+    ```bash
+    python benchmarks/stability/analysis.py
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  The `temperature.ipynb` notebook is the recommended starting point. It runs NVT simulations, which are supported by all models in the registry.
+</Tip>
+
+## Interpreting results
+
+**Survival rate** is the primary metric. A model that survives 100% of NVT heating runs is a prerequisite for use in production MD simulations at elevated temperatures. Models with survival rates below 50% should not be used for dynamics without careful per-system validation.
+
+**Inference speed** determines practical usability. The log-log speed vs. atoms plot reveals:
+
+- The absolute throughput at a given system size
+- How throughput degrades as system size grows (the power-law exponent)
+- Models with favorable message-passing architectures that scale sub-quadratically with atom count
+
+**NPT vs. NVT survival** comparison reveals whether a model's stress tensor implementation is reliable. A large drop in survival rate from NVT to NPT indicates stress-related failures under compression.

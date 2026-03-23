@@ -1,0 +1,170 @@
+---
+title: 'EOS — Equation of State'
+description: 'Compute the Birch–Murnaghan equation of state, bulk modulus, and equilibrium volume for a structure.'
+---
+
+## Overview
+
+The `EOS` task calculates the equation of state (EOS) of a crystal by:
+
+1. Performing a full cell relaxation via the [OPT task](/api/tasks/opt).
+2. Generating `npoints` uniformly strained copies of the relaxed cell.
+3. Relaxing atomic positions (fixed cell) for each strained copy.
+4. Fitting the resulting energy–volume data with the Birch–Murnaghan EOS (via `pymatgen`).
+
+It is registered as a Prefect task with the name **`EOS`** and uses a `TASK_SOURCE + INPUTS` cache policy.
+
+## Function signature
+
+```python
+from mlip_arena.tasks.eos import run as EOS
+
+result = EOS(
+    atoms,
+    calculator,
+    optimizer="BFGSLineSearch",
+    optimizer_kwargs=None,
+    filter="FrechetCell",
+    filter_kwargs=None,
+    criterion=None,
+    max_abs_strain=0.1,
+    npoints=11,
+    concurrent=True,
+    cache_opt=False,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  The input atomic structure.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  ASE-compatible calculator for energy and force evaluations.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGSLineSearch">
+  Optimizer used for both the initial full relaxation and the per-strain position relaxations. See [OPT](/api/tasks/opt) for accepted string values.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.filter" type="Filter | str | None" default="FrechetCell">
+  Filter applied during the **initial** full relaxation only. Subsequent per-strain runs use `filter=None` (positions only). See [OPT](/api/tasks/opt) for accepted string values.
+</ParamField>
+
+<ParamField path="body.filter_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the filter constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criteria forwarded to `optimizer.run()`. See [OPT](/api/tasks/opt) for details.
+</ParamField>
+
+<ParamField path="body.max_abs_strain" type="number" default="0.1">
+  Maximum absolute volumetric strain applied to each lattice dimension. Linear scale factors span `[1 - max_abs_strain, 1 + max_abs_strain]^(1/3)`.
+</ParamField>
+
+<ParamField path="body.npoints" type="number" default="11">
+  Number of strain points (i.e., structures) used to sample the energy–volume curve.
+</ParamField>
+
+<ParamField path="body.concurrent" type="boolean" default="true">
+  When `True`, all per-strain OPT sub-tasks are submitted concurrently using `OPT.submit()` and collected with `prefect.futures.wait`. When `False`, they run sequentially.
+</ParamField>
+
+<ParamField path="body.cache_opt" type="boolean" default="false">
+  When `True`, persists and caches intermediate OPT results so repeated calls with the same inputs skip re-computation. When `False`, intermediate results are not cached.
+</ParamField>
+
+## Internal OPT chaining
+
+EOS internally calls the OPT task twice per strain point:
+
+1. **Initial relaxation** — uses the provided `filter` to relax both cell and positions.
+2. **Per-strain relaxations** — `filter=None`, so only atomic positions are relaxed at each fixed strained volume.
+
+Both calls respect `optimizer`, `optimizer_kwargs`, and `criterion`. The `cache_opt` flag controls whether `persist_result` and `refresh_cache` are set on the inner OPT calls.
+
+## Return value
+
+```python
+{
+    "atoms": Atoms,
+    "eos":   {"volumes": list[float], "energies": list[float]},
+    "K":     float,
+    "b0":    float,
+    "b1":    float,
+    "e0":    float,
+    "v0":    float,
+}
+```
+
+<ResponseField name="atoms" type="ase.Atoms">
+  The fully relaxed (equilibrium) structure.
+</ResponseField>
+
+<ResponseField name="eos" type="object">
+  Raw energy–volume data used for the fit.
+  <Expandable title="properties">
+    <ResponseField name="volumes" type="number[]">
+      Unit cell volumes in Å³, sorted in ascending order.
+    </ResponseField>
+    <ResponseField name="energies" type="number[]">
+      Corresponding potential energies in eV.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="K" type="number">
+  Bulk modulus in GPa (`b0` converted from eV/Å³).
+</ResponseField>
+
+<ResponseField name="b0" type="number">
+  Bulk modulus in eV/Å³ (Birch–Murnaghan `b0` parameter).
+</ResponseField>
+
+<ResponseField name="b1" type="number">
+  Pressure derivative of the bulk modulus (dimensionless).
+</ResponseField>
+
+<ResponseField name="e0" type="number">
+  Equilibrium energy in eV.
+</ResponseField>
+
+<ResponseField name="v0" type="number">
+  Equilibrium volume in Å³.
+</ResponseField>
+
+<Note>
+  If the initial relaxation fails, the function returns a Prefect `State` object instead of a dict. Always check `isinstance(result, dict)` before accessing keys.
+</Note>
+
+## Example
+
+```python
+from ase.build import bulk
+from mlip_arena.tasks.eos import run as EOS
+from mlip_arena.models import load_calculator
+
+atoms = bulk("Si", "diamond", a=5.43)
+calculator = load_calculator("MACE-MP-0")
+
+result = EOS(
+    atoms=atoms,
+    calculator=calculator,
+    optimizer="BFGSLineSearch",
+    filter="FrechetCell",
+    criterion={"fmax": 0.01},
+    max_abs_strain=0.1,
+    npoints=11,
+    concurrent=True,
+)
+
+print(f"Bulk modulus: {result['K']:.1f} GPa")
+print(f"Equilibrium volume: {result['v0']:.3f} Å³")
+print(f"Equilibrium energy: {result['e0']:.4f} eV")
+```

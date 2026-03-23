@@ -1,0 +1,183 @@
+---
+title: Installation
+description: Install MLIP Arena via PyPI or from source with all pretrained models.
+---
+
+## Requirements
+
+MLIP Arena requires **Python 3.9 or later** (3.10, 3.11, and 3.12 are fully tested).
+
+<Tabs>
+  <Tab title="PyPI (simple)">
+
+    ### Install from PyPI
+
+    The PyPI package installs the Prefect workflow framework and all task definitions. It does **not** bundle pretrained model weights — you can still bring your own ASE-compatible calculator.
+
+    ```bash
+    pip install mlip-arena
+    ```
+
+    <Note>
+      This install is sufficient to run workflows with any custom ASE `Calculator` and to orchestrate tasks with Prefect. To use the integrated pretrained models (MACE, CHGNet, eSEN, etc.) you need the source installation below.
+    </Note>
+
+  </Tab>
+  <Tab title="Source (recommended)">
+
+    ### Install from source
+
+    The source installation clones the repository and uses [`uv`](https://github.com/astral-sh/uv) to install all compiled pretrained models with minimal dependency conflicts.
+
+    <Warning>
+      We strongly recommend a **clean virtual environment** before proceeding. Multiple popular MLIPs have conflicting transitive dependencies; installing into an existing environment is likely to break things.
+    </Warning>
+
+    <Steps>
+      <Step title="Install uv (optional but strongly recommended)">
+        `uv` is a fast Python package manager that dramatically reduces install time and resolves conflicts better than `pip`.
+
+        ```bash
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        source $HOME/.local/bin/env
+        ```
+      </Step>
+
+      <Step title="Clone the repository">
+        ```bash
+        git clone https://github.com/atomind-ai/mlip-arena.git
+        cd mlip-arena
+        ```
+      </Step>
+
+      <Step title="Run the one-shot install script">
+        Choose the script for your operating system:
+
+        <CodeGroup>
+          ```bash Linux (GPU / CUDA 12.4)
+          # Targets PyTorch 2.4 + CUDA 12.4
+          bash scripts/install.sh
+          ```
+
+          ```bash macOS (CPU)
+          # Targets PyTorch 2.2 (CPU-only)
+          bash scripts/install-macosx.sh
+          ```
+        </CodeGroup>
+
+        The scripts pin compatible versions of `torch`, `torch-scatter`, `torch-sparse`, and `dgl`, then install every optional model extra:
+
+        <CodeGroup>
+          ```bash Linux — scripts/install.sh
+          TORCH=2.4
+          CUDA=cu124
+          uv pip install torch==${TORCH}.0
+          uv pip install torch-scatter torch-sparse -f https://data.pyg.org/whl/torch-${TORCH}.0+${CUDA}.html
+          uv pip install dgl -f https://data.dgl.ai/wheels/torch-${TORCH}/${CUDA}/repo.html
+          uv pip install mlip-arena[fairchem]
+          uv pip install mlip-arena[orb]
+          uv pip install mlip-arena[matgl]
+          uv pip install mlip-arena[test]
+          uv pip install mlip-arena[mace]
+          ```
+
+          ```bash macOS — scripts/install-macosx.sh
+          TORCH=2.2.0
+          uv pip install torch==${TORCH}
+          uv pip install torch-scatter --no-build-isolation
+          uv pip install torch-sparse --no-build-isolation
+          uv pip install dgl -f https://data.dgl.ai/wheels/torch-${TORCH}/cpu/repo.html
+          uv pip install mlip-arena[fairchem]
+          uv pip install mlip-arena[orb]
+          uv pip install mlip-arena[matgl]
+          uv pip install mlip-arena[test]
+          uv pip install mlip-arena[mace]
+          ```
+        </CodeGroup>
+
+        <Tip>
+          If disk space is tight, installing all compiled models can fill up local storage quickly. Pass `--no-cache` to `uv pip install` or run `uv cache clean` afterwards to reclaim space.
+        </Tip>
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
+
+---
+
+## Optional model extras
+
+You can install support for individual model families instead of running the full install script. Each extra pins the version tested in MLIP Arena:
+
+| Extra | Package pinned | Models unlocked |
+|---|---|---|
+| `mace` | `mace-torch==0.3.12` | MACE-MP(M), MACE-MPA, MACE-OFF(M) |
+| `matgl` | `matgl==1.2.6` | M3GNet, CHGNet (via matgl) |
+| `fairchem` | `fairchem-core==1.10.0` | eqV2(OMat), eSEN, EquiformerV2, eSCN |
+| `orb` | `orb-models==0.4.0` | ORB, ORBv2 |
+| `deepmd` | `deepmd-kit@git (v3.0.0b4)` | DeepMD |
+
+```bash
+# Install a single extra, e.g. MACE only
+pip install "mlip-arena[mace]"
+
+# Install multiple extras at once
+pip install "mlip-arena[mace,matgl,fairchem]"
+```
+
+<Note>
+  The `deepmd` extra pins `torch==2.2.0` and installs `deepmd-kit` directly from GitHub. Install it in isolation to avoid overwriting the PyTorch version required by other models.
+</Note>
+
+---
+
+## HuggingFace authentication (fairchem OMat24)
+
+The `eqV2(OMat)` and `eSEN` checkpoints are gated behind a HuggingFace model repository. You must:
+
+<Steps>
+  <Step title="Request access">
+    Visit the [facebook/OMAT24 model repo](https://huggingface.co/facebook/OMAT24) on HuggingFace and request downloading access. Note: you need access to the **model** repo, not the dataset repo.
+  </Step>
+  <Step title="Authenticate locally">
+    Log in to HuggingFace Hub on your machine:
+
+    ```bash
+    huggingface-cli login
+    ```
+
+    This writes a token to `~/.cache/huggingface/token`. The fairchem loader will pick it up automatically at import time.
+  </Step>
+</Steps>
+
+<Warning>
+  Skipping authentication will cause the fairchem models to fail at checkpoint download with a `401 Unauthorized` error even after a successful `pip install mlip-arena[fairchem]`.
+</Warning>
+
+---
+
+## Virtual environment recommendations
+
+Because MLIP Arena integrates many models with conflicting dependencies, always install into a dedicated virtual environment.
+
+<CodeGroup>
+  ```bash uv venv (recommended)
+  uv venv .venv --python 3.11
+  source .venv/bin/activate
+  ```
+
+  ```bash venv (stdlib)
+  python3.11 -m venv .venv
+  source .venv/bin/activate
+  ```
+
+  ```bash conda
+  conda create -n mlip-arena python=3.11
+  conda activate mlip-arena
+  ```
+</CodeGroup>
+
+<Tip>
+  `uv venv` is the fastest option and pairs naturally with `uv pip install` used in the install scripts.
+</Tip>

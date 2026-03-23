@@ -1,0 +1,122 @@
+---
+title: "Combustion"
+description: "Testing MLIP reactive chemistry capability through hydrogen combustion molecular dynamics, measuring yield, reaction enthalpy, and simulation stability."
+---
+
+## Physical motivation
+
+Combustion is a prototypical example of **reactive chemistry**: bonds break and form during the simulation, and the final state of the system is chemically different from the initial state. Most MLIPs are trained on static DFT calculations and do not explicitly model bond breaking and forming — they are expected to learn these processes implicitly from their training data.
+
+This benchmark tests whether an MLIP can:
+
+- Drive a high-temperature chemical reaction to completion
+- Predict the correct products (water molecules from hydrogen combustion)
+- Reproduce the experimental reaction enthalpy
+- Maintain simulation stability throughout the highly exothermic reaction event
+
+A model that fails this benchmark may still perform well on static property benchmarks, revealing a disconnect between pointwise energy accuracy and dynamic chemical capability.
+
+## Reaction and system
+
+The benchmark simulates **hydrogen combustion**:
+
+```
+2H₂ + O₂ → 2H₂O
+```
+
+The simulation box contains **256 hydrogen atoms and 128 oxygen atoms** (`H256O128`) — equivalent to 64 formula units of the stoichiometric `2H₂ + O₂` mixture. The initial configuration is provided in `benchmarks/combustion/H256O128.extxyz`.
+
+The Prefect flow is importable from:
+
+```python
+from mlip_arena.tasks.combustion.flow import hydrogen_combustion
+```
+
+See `benchmarks/combustion/run.ipynb` for a complete walkthrough.
+
+### Temperature protocol
+
+The simulation follows a three-stage temperature ramp:
+
+1. **Ramp up** from 300 K to 3000 K over the first third of the simulation
+2. **Hold** at 3000 K for the middle third (the combustion event occurs here)
+3. **Ramp down** from 3000 K back to 300 K over the final third
+
+The leaderboard marks the expected flame temperature region (based on experimental hydrogen combustion data) with a shaded band for reference.
+
+## Metrics
+
+| Metric | Description |
+|--------|-------------|
+| Reaction yield (%) | Fraction of H₂O molecules formed relative to the stoichiometric maximum (128 molecules) |
+| Reaction enthalpy ΔH (kcal/mol) | Energy change per water molecule, compared to experimental reference of −68.3 kcal/mol |
+| Number of products vs. timestep | Time series of water molecule count — reveals reaction kinetics and completeness |
+| Temperature vs. timestep | Actual temperature trajectory vs. the target ramp |
+| Energy drift ΔE (kcal/mol) | Total energy change per water molecule over the simulation |
+| Center of mass drift (Å) | Displacement of the system's center of mass — a stability diagnostic |
+| Steps per second | MD throughput on a single A100 GPU |
+
+<Note>
+  The experimental reference enthalpy (−68.3 kcal/mol) comes from the CRC Handbook of Chemistry and Physics (Lide, 2004). The conversion factor used is 23.0609 eV to kcal/mol.
+</Note>
+
+## Experimental reference
+
+Two external references are used for comparison:
+
+1. **Flame temperature window** (512,345 – 666,667 timesteps): from Hasche et al. (2023), *Fuel*, 352, 128964 — experimental assessment of hydrogen combustion flame temperatures.
+2. **Reaction enthalpy**: −68.3 kcal/mol from the CRC Handbook of Chemistry and Physics, Vol. 85 (Lide, 2004).
+
+## Model support
+
+The following models support this benchmark (`gpu-tasks: combustion` in the model registry):
+
+| Model | Family | Training data |
+|-------|--------|---------------|
+| MACE-MP(M) | mace-mp | MPTrj |
+| MACE-MPA | mace-mp | MPTrj, Alexandria |
+| CHGNet | chgnet | MPTrj |
+| M3GNet | matgl | MPF |
+| MatterSim | mattersim | MPTrj, Alexandria |
+| ORBv2 | orb | MPTrj, Alexandria |
+| ORB | orb | MPTrj, Alexandria |
+| SevenNet | sevennet | MPTrj |
+| EquiformerV2(OC20) | equiformer | OC20 |
+| eSCN(OC20) | escn | OC20 |
+
+<Warning>
+  Models trained only on inorganic materials datasets (e.g., OC22) may struggle with the molecular H₂/O₂/H₂O chemistry. Models trained on SPICE (organic molecules) such as MACE-OFF are excluded from this benchmark because SPICE does not cover oxygen-containing inorganic systems.
+</Warning>
+
+## How to run
+
+```python
+from mlip_arena.tasks.combustion.flow import hydrogen_combustion
+
+hydrogen_combustion(model="MACE-MP(M)")
+```
+
+For a full example with parallel execution and result collection, see `benchmarks/combustion/run.ipynb`.
+
+Results for each model are saved as JSON files in `benchmarks/combustion/<family>/<model>_H256O128.json`, containing per-timestep arrays of:
+- `timestep`
+- `nproducts` (number of water molecules)
+- `temperatures`
+- `energies`
+- `com_drifts` (center of mass drift in x, y, z)
+- `yield` (final fractional yield)
+- `steps_per_second`
+
+## Interpreting results
+
+**Reaction yield** is the primary outcome metric. A model with yield near 100% successfully drives the combustion to completion. Models with low yield either fail to initiate the reaction or produce incorrect products.
+
+**Reaction enthalpy** tests thermochemical accuracy. The best models reproduce the experimental value of −68.3 kcal/mol per water molecule formed. Significant deviations indicate that the model's energy landscape for the H₂–O₂–H₂O system is incorrect.
+
+**Center of mass drift** is a stability diagnostic. In a well-behaved NVE/NVT simulation with no external forces, the center of mass should remain stationary. Drift in the COM indicates non-conservation of momentum, which can arise from numerical instabilities or incorrect force cancellation.
+
+**Steps per second** on a single A100 GPU provides a direct comparison of inference speed under reactive conditions, where the chemical environment changes significantly at each step.
+
+<Tip>
+  Models that achieve high yield but incorrect reaction enthalpy likely have correct qualitative reactivity but quantitatively wrong energetics. This combination suggests the model captures bond topology changes but has energy-scale errors for H–O chemistry.
+</Tip>

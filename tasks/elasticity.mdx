@@ -1,0 +1,148 @@
+---
+title: "Elasticity"
+description: "Compute the full elastic tensor and derived moduli from finite-strain stress calculations."
+---
+
+The `ELASTICITY` task computes the second-order elastic tensor of a crystal by:
+
+1. Fully relaxing the structure with `OPT`.
+2. Applying a set of normal and shear strains to generate deformed structures via `pymatgen.analysis.elasticity.DeformedStructureSet`.
+3. Computing the stress tensor of each deformed structure.
+4. Fitting a linear stress-strain relationship to extract the 6×6 Voigt elastic tensor.
+
+The implementation is adapted from [MatCalc](https://github.com/materialsvirtuallab/matcalc).
+
+## Function signature
+
+```python
+from mlip_arena.tasks import ELASTICITY
+
+result = ELASTICITY(
+    atoms=atoms,
+    calculator=calc,
+    optimizer="BFGSLineSearch",
+    optimizer_kwargs=None,
+    filter="FrechetCell",
+    filter_kwargs=None,
+    criterion=None,
+    normal_strains=np.linspace(-0.01, 0.01, 4),
+    shear_strains=np.linspace(-0.06, 0.06, 4),
+    persist_opt=True,
+    cache_opt=False,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  Input structure. A copy is made internally before relaxation.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  Calculator for energy, force, and stress evaluations.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGSLineSearch">
+  Optimizer passed to the initial `OPT` task. See [structure optimization](/tasks/structure-optimization) for valid values.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.filter" type="Filter | str | None" default="FrechetCell">
+  Cell filter for the initial full relaxation. Defaults to `"FrechetCell"` to allow both positions and cell to relax.
+</ParamField>
+
+<ParamField path="body.filter_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the filter constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criterion dict forwarded to the `OPT` task (e.g. `{"fmax": 0.001}`).
+</ParamField>
+
+<ParamField path="body.normal_strains" type="list[float] | ndarray" default="np.linspace(-0.01, 0.01, 4)">
+  Normal strain magnitudes applied along each of the three Cartesian directions. Default covers ±1% in 4 steps. More points improve the linear fit accuracy.
+</ParamField>
+
+<ParamField path="body.shear_strains" type="list[float] | ndarray" default="np.linspace(-0.06, 0.06, 4)">
+  Shear strain magnitudes applied for the off-diagonal components of the strain tensor. Default covers ±6% in 4 steps. Larger range needed because MLIPs often show weaker shear stiffness.
+</ParamField>
+
+<ParamField path="body.persist_opt" type="boolean" default="true">
+  If `True`, the `OPT` result is persisted to Prefect's result store.
+</ParamField>
+
+<ParamField path="body.cache_opt" type="boolean" default="false">
+  If `True`, the `OPT` result is cached and reused if the same structure and calculator are provided again.
+</ParamField>
+
+## Return value
+
+Returns a `dict` on success, or a Prefect `State` if the initial relaxation fails:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `elastic_tensor` | `pymatgen.analysis.elasticity.ElasticTensor` | Full 3×3×3×3 (Voigt 6×6) elastic tensor in GPa, zeroed below numerical tolerance |
+| `residuals_sum` | `float` | Sum of least-squares residuals from all stress-strain fits — a measure of fit quality |
+
+The `ElasticTensor` object provides derived moduli:
+
+```python
+et = result["elastic_tensor"]
+
+print("K_Voigt (GPa):", et.k_voigt)
+print("K_Reuss (GPa):", et.k_reuss)
+print("G_Voigt (GPa):", et.g_voigt)
+print("G_Reuss (GPa):", et.g_reuss)
+print("Young's modulus (GPa):", et.y_mod / 1e9)   # convert Pa → GPa
+print("Poisson ratio:", et.universal_anisotropy)
+```
+
+## Example
+
+<Steps>
+  <Step title="Import and set up">
+    ```python
+    import numpy as np
+    from ase.build import bulk
+    from mlip_arena.tasks import ELASTICITY
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    atoms = bulk("Cu", "fcc", a=3.6)
+    calc = get_calculator(MLIPEnum.MACE_MP)
+    ```
+  </Step>
+  <Step title="Run ELASTICITY">
+    ```python
+    result = ELASTICITY(
+        atoms=atoms,
+        calculator=calc,
+        filter="FrechetCell",
+        criterion={"fmax": 0.001},
+        normal_strains=np.linspace(-0.01, 0.01, 5),
+        shear_strains=np.linspace(-0.06, 0.06, 5),
+    )
+    ```
+  </Step>
+  <Step title="Extract elastic moduli">
+    ```python
+    et = result["elastic_tensor"]
+
+    print("Elastic tensor (GPa):")
+    print(et.voigt)
+
+    print(f"Bulk modulus (Voigt):  {et.k_voigt:.1f} GPa")
+    print(f"Bulk modulus (Reuss):  {et.k_reuss:.1f} GPa")
+    print(f"Shear modulus (Voigt): {et.g_voigt:.1f} GPa")
+    print(f"Shear modulus (Reuss): {et.g_reuss:.1f} GPa")
+    print(f"Fit residuals sum: {result['residuals_sum']:.4f}")
+    ```
+  </Step>
+</Steps>
+
+<Note>
+For accurate elastic constants, use a tight convergence criterion (e.g. `fmax=0.001`) for the initial relaxation. Poorly relaxed structures produce inconsistent stress-strain data.
+</Note>

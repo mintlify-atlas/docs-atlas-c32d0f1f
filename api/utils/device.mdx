@@ -1,0 +1,110 @@
+---
+title: 'Device utilities'
+description: 'Functions for selecting the optimal compute device (GPU, MPS, or CPU) for MLIP calculations.'
+---
+
+## `get_freer_device`
+
+```python
+from mlip_arena.models.utils import get_freer_device
+```
+
+Selects the best available compute device by checking, in order:
+
+1. **CUDA GPUs** — queries free memory for every visible GPU and returns the one with the most free memory.
+2. **Apple MPS** — if no CUDA GPU is found but `torch.backends.mps.is_available()` is `True`, returns `mps`.
+3. **CPU** — fallback when neither CUDA nor MPS is available.
+
+`MLIPCalculator.__init__` calls this function automatically when no `device` is supplied, so most users never need to call it directly.
+
+```python
+def get_freer_device() -> torch.device:
+```
+
+### Parameters
+
+This function takes no arguments.
+
+### Return value
+
+<ResponseField name="device" type="torch.device" required>
+  The selected device. One of:
+
+  - `torch.device("cuda:N")` — the CUDA GPU at index `N` with the most free memory.
+  - `torch.device("mps")` — Apple Metal Performance Shaders (Apple Silicon / AMD GPU on macOS).
+  - `torch.device("cpu")` — fallback when no accelerator is available.
+</ResponseField>
+
+### Examples
+
+#### Automatic device selection (recommended)
+
+You normally do not need to call `get_freer_device` directly. `get_calculator` (and `MLIPCalculator`) call it for you:
+
+```python
+from mlip_arena.models import MLIPEnum
+from mlip_arena.tasks.utils import get_calculator
+
+# Device is chosen automatically
+calc = get_calculator(MLIPEnum["MACE-MP(M)"])
+```
+
+#### Explicit device selection
+
+Call `get_freer_device` when you want to pin the device yourself before passing it downstream:
+
+```python
+from mlip_arena.models.utils import get_freer_device
+from mlip_arena.tasks.utils import get_calculator
+from mlip_arena.models import MLIPEnum
+
+device = get_freer_device()
+print(device)  # e.g. cuda:0
+
+calc = get_calculator(MLIPEnum["MACE-MP(M)"], device=str(device))
+```
+
+#### Checking the selected device without constructing a calculator
+
+```python
+import torch
+from mlip_arena.models.utils import get_freer_device
+
+device = get_freer_device()
+
+if device.type == "cuda":
+    idx = device.index
+    free_mb = (
+        torch.cuda.get_device_properties(idx).total_memory
+        - torch.cuda.memory_allocated(idx)
+    ) / 1024**2
+    print(f"Using GPU {device} with {free_mb:.0f} MB free")
+elif device.type == "mps":
+    print("Using Apple MPS")
+else:
+    print("Falling back to CPU")
+```
+
+### Best practices
+
+- **Multi-GPU nodes** — `get_freer_device` picks the GPU with the most free memory at the moment it is called. On busy shared nodes, re-call it immediately before starting a long run rather than caching the result at startup.
+- **Pinning a specific GPU** — bypass `get_freer_device` and pass `device="cuda:2"` (or whichever index you want) directly to `get_calculator`.
+- **CPU-only environments** — no configuration needed. `get_freer_device` falls back to CPU automatically, so code is portable without changes.
+- **Mixed-precision** — after selecting the device, cast your model weights to `torch.float32` or `torch.float16` explicitly if the default precision causes numerical issues on your hardware.
+
+## How `MLIPCalculator` uses device selection
+
+`MLIPCalculator.__init__` (in `mlip_arena/models/__init__.py`) follows the same logic:
+
+```python
+self.device = device or get_freer_device()
+self.model.to(self.device)
+```
+
+If you instantiate a calculator class directly (rather than via `get_calculator`), pass `device` to avoid an unintended GPU selection:
+
+```python
+from mlip_arena.models.externals.mace_mp import MACE_MP_Medium
+
+calc = MACE_MP_Medium(device="cuda:0")
+```

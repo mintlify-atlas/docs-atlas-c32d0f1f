@@ -1,0 +1,226 @@
+---
+title: 'Model Registry'
+description: 'Reference for the MLIP Arena model registry — the registry.yaml file, all fields, and the complete model table.'
+keywords: ['registry', 'registry.yaml', 'REGISTRY', 'model metadata', 'MLIP Arena']
+---
+
+## Overview
+
+The model registry is the single source of truth for every MLIP model available in MLIP Arena. It lives at:
+
+```
+mlip_arena/models/registry.yaml
+```
+
+At import time, `mlip_arena.models` reads the file and exposes the parsed content as the `REGISTRY` dict:
+
+```python
+from mlip_arena.models import REGISTRY
+
+print(REGISTRY["MACE-MP(M)"])
+# {'module': 'externals', 'class': 'MACE_MP_Medium', 'family': 'mace-mp', ...}
+```
+
+`REGISTRY` is then used to populate `MLIPMap` and `MLIPEnum` by dynamically importing each model class.
+
+---
+
+## Registry fields
+
+Each top-level key in `registry.yaml` is the canonical model name. Its value is a dict with the following fields:
+
+### Identification and loading
+
+<ParamField path="module" type="string" required>
+  Sub-package under `mlip_arena.models` that contains the model file. Currently always `"externals"`.
+</ParamField>
+
+<ParamField path="class" type="string" required>
+  Name of the Python class to import from `mlip_arena.models.{module}.{family}`. This class is used as the calculator.
+</ParamField>
+
+<ParamField path="family" type="string" required>
+  Module filename (without `.py`) inside `mlip_arena.models.{module}/`. E.g. `"mace-mp"` maps to `mace-mp.py`.
+</ParamField>
+
+<ParamField path="package" type="string" required>
+  Pip-installable package and version required for this model (e.g. `"mace-torch==0.3.9"`).
+</ParamField>
+
+<ParamField path="checkpoint" type="string">
+  Model checkpoint identifier — a filename, version tag, or URL used by the class constructor to load weights.
+</ParamField>
+
+### Provenance
+
+<ParamField path="username" type="string">
+  HuggingFace Hub username of the model maintainer.
+</ParamField>
+
+<ParamField path="last-update" type="string (ISO 8601)">
+  Timestamp of the last update to the registry entry.
+</ParamField>
+
+<ParamField path="datetime" type="string (ISO 8601)">
+  Datetime associated with the model release or upload.
+</ParamField>
+
+<ParamField path="date" type="string (YYYY-MM-DD)">
+  Publication or release date of the model.
+</ParamField>
+
+<ParamField path="github" type="string (URL)">
+  Link to the upstream GitHub repository.
+</ParamField>
+
+<ParamField path="doi" type="string (URL)">
+  DOI or arXiv link to the associated paper.
+</ParamField>
+
+<ParamField path="license" type="string">
+  SPDX license identifier (e.g. `"MIT"`, `"Apache-2.0"`, `"GPL-3.0-only"`). `null` if not specified.
+</ParamField>
+
+### Training data
+
+<ParamField path="datasets" type="string[]">
+  List of training dataset names (e.g. `["MPTrj", "Alexandria"]`). Common values:
+
+  - `MPTrj` — Materials Project trajectories
+  - `Alexandria` — Alexandria crystal dataset
+  - `OMat` — Open Materials dataset (Meta)
+  - `MPF` — Materials Project forces
+  - `MP22` — Materials Project 2022
+  - `OC20` / `OC22` — Open Catalyst datasets
+  - `SPICE` — Small molecule and protein interaction dataset
+  - `Proprietary` — non-public data
+</ParamField>
+
+### Benchmark tasks
+
+<ParamField path="gpu-tasks" type="string[]">
+  Benchmark tasks the model participates in on GPU. Supported task identifiers:
+
+  - `homonuclear-diatomics` — diatomic molecule potential energy curves
+  - `stability` — thermodynamic stability prediction
+  - `combustion` — combustion reaction MD
+  - `eos_bulk` — bulk equation of state
+  - `wbm_ev` — WBM energy-volume curves
+</ParamField>
+
+<ParamField path="cpu-tasks" type="string[]">
+  Benchmark tasks the model participates in on CPU (typically lighter tasks). Common value: `eos_alloy`.
+</ParamField>
+
+### Capabilities
+
+<ParamField path="prediction" type="string">
+  Compact string listing which physical quantities the model outputs:
+
+  | Code | Quantity |
+  |---|---|
+  | `E` | Energy |
+  | `F` | Forces |
+  | `S` | Stress |
+  | `M` | Magnetic moments |
+
+  Example: `"EFSM"` means energy + forces + stress + magnetic moments.
+</ParamField>
+
+<ParamField path="nvt" type="boolean">
+  Whether the model supports NVT (constant volume/temperature) molecular dynamics.
+</ParamField>
+
+<ParamField path="npt" type="boolean">
+  Whether the model supports NPT (constant pressure/temperature) molecular dynamics. Some models have known issues with NPT (see inline comments in `registry.yaml`).
+</ParamField>
+
+---
+
+## Complete model table
+
+| Model | Family | Prediction | NVT | NPT | License | Datasets |
+|---|---|---|:---:|:---:|---|---|
+| MACE-MP(M) | mace-mp | EFS | Yes | Yes | MIT | MPTrj |
+| CHGNet | chgnet | EFSM | Yes | Yes | BSD-3-Clause | MPTrj |
+| M3GNet | matgl | EFS | Yes | Yes | BSD-3-Clause | MPF |
+| MatterSim | mattersim | EFS | Yes | Yes | MIT | MPTrj, Alexandria, Proprietary |
+| ORBv2 | orb | EFS | Yes | Yes | Apache-2.0 | MPTrj, Alexandria |
+| SevenNet | sevennet | EFS | Yes | Yes | GPL-3.0-only | MPTrj |
+| eqV2(OMat) | fairchem | EFS | Yes | No | Modified Apache-2.0 | OMat, MPTrj, Alexandria |
+| MACE-MPA | mace-mp | EFS | Yes | Yes | MIT | MPTrj, Alexandria |
+| eSEN | fairchem | EFS | Yes | Yes | Modified Apache-2.0 | OMat, MPTrj, Alexandria |
+| EquiformerV2(OC22) | equiformer | EF | Yes | No | — | OC22 |
+| EquiformerV2(OC20) | equiformer | EF | Yes | No | — | OC20 |
+| eSCN(OC20) | escn | EF | Yes | No | — | OC20 |
+| MACE-OFF(M) | mace-off | EFS | Yes | Yes | ASL | SPICE |
+| ANI2x | ani | EFS | Yes | Yes | MIT | — |
+| ALIGNN | alignn | EFS | Yes | Yes | — | MP22 |
+| DeepMD | deepmd | EFS | Yes | Yes | — | MPTrj |
+| ORB | orb | EFS | Yes | Yes | Apache-2.0 | MPTrj, Alexandria |
+
+<Note>
+`EF` models output energy and forces only. `EFSM` models additionally output stress and magnetic moments. Models without a listed license have `null` in the registry.
+</Note>
+
+---
+
+## Adding a new model
+
+<Steps>
+  <Step title="Create the calculator file">
+    Add a new Python file under `mlip_arena/models/externals/` named after the model family (e.g. `myfamily.py`). Define a class that wraps the model and implements a `calculate` method compatible with ASE.
+
+    ```python
+    # mlip_arena/models/externals/myfamily.py
+    from mlip_arena.models.utils import get_freer_device
+
+    class MyModel:
+        def __init__(self, checkpoint=None, device=None, **kwargs):
+            use_device = str(device or get_freer_device())
+            # load weights, build model ...
+
+        def calculate(self, atoms, properties, system_changes):
+            # compute and populate self.results
+            ...
+    ```
+  </Step>
+
+  <Step title="Add an entry to registry.yaml">
+    Append a new entry to `mlip_arena/models/registry.yaml` following the schema above:
+
+    ```yaml
+    MyModel:
+      module: externals
+      class: MyModel
+      family: myfamily
+      package: my-package==1.0.0
+      checkpoint: my-checkpoint-v1.pt
+      username: your-hf-username
+      last-update: 2025-01-01T00:00:00
+      datetime: 2025-01-01T00:00:00
+      datasets:
+        - MPTrj
+      gpu-tasks:
+        - homonuclear-diatomics
+      prediction: EFS
+      nvt: true
+      npt: true
+      license: MIT
+      github: https://github.com/your-org/your-repo
+      doi: https://arxiv.org/abs/xxxx.xxxxx
+      date: 2025-01-01
+    ```
+  </Step>
+
+  <Step title="Verify the model loads">
+    Install the required package and confirm your model appears in `MLIPEnum`:
+
+    ```python
+    from mlip_arena.models import MLIPEnum
+
+    assert "MyModel" in MLIPEnum.__members__, "Model not loaded — check package install and class path"
+    print(MLIPEnum["MyModel"].value)
+    ```
+  </Step>
+</Steps>

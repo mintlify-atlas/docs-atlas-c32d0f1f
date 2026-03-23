@@ -1,0 +1,242 @@
+---
+title: "Adding a new benchmark"
+description: "Design and register a new benchmark task that tests a physical property or failure mode."
+---
+
+## Philosophy
+
+MLIP Arena benchmarks are built by **reusing and chaining existing tasks**. A benchmark is a Prefect [flow](https://docs.prefect.io/v3/develop/write-flows) that loops over models (or structures), calls one or more modular tasks for each, and aggregates the results.
+
+The existing modular tasks you can compose are:
+
+| Import name | Module | Description |
+|---|---|---|
+| `OPT` | `mlip_arena.tasks.optimize` | Structure optimization |
+| `EOS` | `mlip_arena.tasks.eos` | Equation of state (energy-volume scan) |
+| `MD` | `mlip_arena.tasks.md` | Molecular dynamics (NVE, NVT, NPT) |
+| `PHONON` | `mlip_arena.tasks.phonon` | Phonon calculation via phonopy |
+| `NEB` | `mlip_arena.tasks.neb` | Nudged elastic band |
+| `NEB_FROM_ENDPOINTS` | `mlip_arena.tasks.neb` | NEB with automatic image interpolation |
+| `ELASTICITY` | `mlip_arena.tasks.elasticity` | Elastic tensor calculation |
+
+In Prefect terminology, each of the above is a **task** — one operation on one input structure. A **flow** parallelizes many such tasks across models or structures and handles caching, retries, and result collection.
+
+<Note>
+  Please reuse, extend, or chain the general tasks listed above rather than reimplementing common operations. This keeps benchmarks consistent and results comparable across models.
+</Note>
+
+## Benchmark structure
+
+Each benchmark lives in its own folder under `benchmarks/`:
+
+```
+benchmarks/
+  my-benchmark/
+    README.md           # Description, dataset, and how to run
+    benchmark.py        # Prefect flow definition
+    visualize.py        # (optional) Streamlit visualization helpers
+    data/               # (optional) Input structures or reference data
+```
+
+The `README.md` should describe: what physical property is being tested, what dataset or set of structures is used, how to run the benchmark, and what the expected outputs are.
+
+## Creating a Prefect flow
+
+Wrap your benchmark logic in a `@flow`-decorated function. Use `.submit()` on task calls to dispatch them concurrently to Prefect workers:
+
+```python benchmark.py
+from prefect import flow
+from ase.build import bulk
+
+from mlip_arena.models import MLIPEnum
+from mlip_arena.tasks import OPT, EOS
+from mlip_arena.tasks.utils import get_calculator
+
+
+@flow
+def run_eos_benchmark(models=None):
+    """Run equation-of-state benchmark for all (or a subset of) models."""
+    if models is None:
+        models = list(MLIPEnum)
+
+    atoms = bulk("Cu", "fcc", a=3.6)
+
+    futures = []
+    for model in models:
+        future = EOS.submit(
+            atoms=atoms,
+            calculator=get_calculator(model),
+        )
+        futures.append((model.name, future))
+
+    results = {}
+    for name, future in futures:
+        try:
+            results[name] = future.result(raise_on_failure=False)
+        except Exception as e:
+            results[name] = {"error": str(e)}
+
+    return results
+
+
+if __name__ == "__main__":
+    run_eos_benchmark()
+```
+
+<Tip>
+  Use `.submit()` with `raise_on_failure=False` when collecting results so that a single model failure does not abort the entire benchmark run.
+</Tip>
+
+## Step-by-step guide
+
+<Steps>
+  <Step title="Identify the physical property or failure mode">
+    Define clearly what your benchmark measures and why existing benchmarks do not cover it. Open a [GitHub Discussion](https://github.com/atomind-ai/mlip-arena/discussions/new?category=ideas) to get early feedback before investing significant implementation effort.
+  </Step>
+
+  <Step title="Create the benchmark folder">
+    ```bash
+    mkdir benchmarks/my-benchmark
+    ```
+
+    Add a `README.md` that describes the benchmark, the dataset, and how to run it.
+  </Step>
+
+  <Step title="Select and chain existing tasks">
+    Import from `mlip_arena.tasks` rather than re-implementing operations. For example, a bulk modulus benchmark can reuse `EOS` directly:
+
+    ```python
+    from mlip_arena.tasks import EOS
+    from mlip_arena.tasks.utils import get_calculator
+    ```
+
+    If your benchmark requires a new primitive operation not covered by existing tasks, implement it as a `@task`-decorated function in `mlip_arena/tasks/` and submit it for review separately.
+  </Step>
+
+  <Step title="Write the Prefect flow">
+    Create `benchmarks/my-benchmark/benchmark.py` with a `@flow`-decorated entry point that loops over `MLIPEnum`, calls `.submit()` for each model, and returns a dictionary of results. See the example above.
+
+    For HPC-scale runs with Prefect infrastructure, refer to the [MD stability benchmark notebook](https://github.com/atomind-ai/mlip-arena/blob/main/benchmarks/stability/temperature.ipynb) as a practical example.
+  </Step>
+
+  <Step title="Store results on Hugging Face Dataset Hub">
+    Benchmark results are stored in the [atomind/mlip-arena](https://huggingface.co/datasets/atomind/mlip-arena) Hugging Face dataset repository. Create a subfolder named after your benchmark task.
+
+    ```python
+    from huggingface_hub import HfApi
+
+    api = HfApi()
+    api.upload_file(
+        path_or_fileobj="results.json",
+        path_in_repo="my-benchmark/results.json",
+        repo_id="atomind/mlip-arena",
+        repo_type="dataset",
+    )
+    ```
+
+    Results uploaded to the Hub are automatically detected by the HF webhook and reflected on the live leaderboard.
+  </Step>
+
+  <Step title="Add to task registry">
+    Register your benchmark in `mlip_arena/tasks/registry.yaml` so it appears in the leaderboard and the Streamlit app:
+
+    ```yaml
+    My benchmark:
+      category: Properties and Physical Behaviors
+      task-page: my-benchmark
+      task-layout: wide
+      rank-page: my-benchmark
+      last-update: 2025-01-01
+    ```
+
+    The `category` groups your benchmark with related tasks in the sidebar. Current categories are `Fundamentals` and `Molecular Dynamics`.
+  </Step>
+
+  <Step title="Add visualization to the Streamlit app">
+    The live leaderboard is a Streamlit app under `serve/`. Add a page for your benchmark in `serve/tasks/` following the pattern of existing pages (e.g., `serve/tasks/eos_bulk.py`).
+
+    The page should:
+    - Load results from the HF dataset.
+    - Render a leaderboard table sorted by the primary metric.
+    - Include at least one informative plot (e.g., scatter, violin, or line chart).
+
+    After testing locally with `streamlit run serve/app.py`, include the new page file in your PR.
+  </Step>
+
+  <Step title="Write a test">
+    Add a test file in `tests/` that verifies your benchmark runs end-to-end on a small subset of models and structures:
+
+    ```python tests/test_my_benchmark.py
+    import pytest
+    from ase.build import bulk
+
+    from mlip_arena.models import MLIPEnum
+    from mlip_arena.tasks import EOS
+    from mlip_arena.tasks.utils import get_calculator
+
+
+    @pytest.mark.parametrize("model", [MLIPEnum["MACE-MP(M)"]])
+    def test_my_benchmark(model):
+        atoms = bulk("Cu", "fcc", a=3.6)
+        result = EOS(
+            atoms=atoms,
+            calculator=get_calculator(model),
+        )
+        assert result is not None
+        assert "bulk_modulus" in result
+    ```
+
+    <Tip>
+      Test with a single fast model (such as `MACE-MP(M)`) and a small structure before running the full benchmark across all models.
+    </Tip>
+  </Step>
+
+  <Step title="Open a pull request">
+    Commit your benchmark folder, the registry entry, the Streamlit page, and your test file. Open a PR against `main`. Reference any related issues or discussions in the PR description.
+  </Step>
+</Steps>
+
+## Example: a minimal benchmark
+
+The following is a complete, minimal example that benchmarks bulk modulus via EOS for all models:
+
+```python benchmarks/bulk-modulus/benchmark.py
+from __future__ import annotations
+
+from prefect import flow
+from ase.build import bulk
+
+from mlip_arena.models import MLIPEnum
+from mlip_arena.tasks import EOS
+from mlip_arena.tasks.utils import get_calculator
+
+
+@flow(name="Bulk Modulus Benchmark")
+def run(models: list | None = None) -> dict:
+    """Compute bulk modulus via EOS for every model in MLIPEnum."""
+    models = models or list(MLIPEnum)
+    atoms = bulk("Al", "fcc", a=4.05)
+
+    futures = [
+        (model.name, EOS.submit(atoms=atoms, calculator=get_calculator(model)))
+        for model in models
+    ]
+
+    return {
+        name: future.result(raise_on_failure=False)
+        for name, future in futures
+    }
+
+
+if __name__ == "__main__":
+    results = run()
+    for name, result in results.items():
+        if result and "bulk_modulus" in result:
+            print(f"{name}: K = {result['bulk_modulus']:.1f} GPa")
+        else:
+            print(f"{name}: failed")
+```
+
+<Warning>
+  Always test with a single model before running the full benchmark across all models. Full runs on 15+ models with GPU tasks can take hours and consume significant compute resources.
+</Warning>

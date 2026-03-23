@@ -1,0 +1,208 @@
+---
+title: 'MLIP and MLIPEnum'
+description: 'API reference for the MLIP base class, MLIPEnum, and MLIPMap.'
+keywords: ['MLIP', 'MLIPEnum', 'MLIPMap', 'machine learning interatomic potential', 'PyTorch', 'HuggingFace']
+---
+
+## Overview
+
+The `mlip_arena.models` module exposes three top-level objects that provide a unified interface to all registered machine learning interatomic potential (MLIP) models:
+
+- **`REGISTRY`** — raw dict loaded from `registry.yaml`
+- **`MLIPMap`** — dict mapping model names to their Python classes
+- **`MLIPEnum`** — an `Enum` built from `MLIPMap` for safe, enumerable model references
+- **`MLIP`** — the base class all native MLIP models inherit from
+
+---
+
+## MLIPEnum
+
+`MLIPEnum` is a Python `Enum` whose members are the successfully-imported MLIP model classes. It is built at import time from `MLIPMap`.
+
+```python
+from mlip_arena.models import MLIPEnum
+```
+
+### Iterating over all models
+
+```python
+for model in MLIPEnum:
+    print(model.name, model.value)  # e.g. "MACE-MP(M)", <class 'MACE_MP_Medium'>
+```
+
+### Accessing a model by name
+
+```python
+model_cls = MLIPEnum["MACE-MP(M)"].value
+print(model_cls)  # <class 'mlip_arena.models.externals.mace-mp.MACE_MP_Medium'>
+```
+
+### Members
+
+Members are populated at runtime from the registry. Any model whose package is not installed is silently skipped with a warning. The full set of registered models is:
+
+| Member name | Class | Family |
+|---|---|---|
+| `MACE-MP(M)` | `MACE_MP_Medium` | mace-mp |
+| `CHGNet` | `CHGNet` | chgnet |
+| `M3GNet` | `M3GNet` | matgl |
+| `MatterSim` | `MatterSim` | mattersim |
+| `ORBv2` | `ORBv2` | orb |
+| `SevenNet` | `SevenNet` | sevennet |
+| `eqV2(OMat)` | `eqV2` | fairchem |
+| `MACE-MPA` | `MACE_MPA` | mace-mp |
+| `eSEN` | `eSEN` | fairchem |
+| `EquiformerV2(OC22)` | `EquiformerV2` | equiformer |
+| `EquiformerV2(OC20)` | `EquiformerV2OC20` | equiformer |
+| `eSCN(OC20)` | `eSCN` | escn |
+| `MACE-OFF(M)` | `MACE_OFF_Medium` | mace-off |
+| `ANI2x` | `ANI2x` | ani |
+| `ALIGNN` | `ALIGNN` | alignn |
+| `DeepMD` | `DeepMD` | deepmd |
+| `ORB` | `ORB` | orb |
+
+<Note>
+Only models whose Python packages are installed in the current environment will appear as members of `MLIPEnum`. Missing packages produce a warning log and are skipped.
+</Note>
+
+---
+
+## MLIPMap
+
+`MLIPMap` is the plain `dict` from which `MLIPEnum` is built. Keys are model name strings; values are the corresponding Python classes.
+
+```python
+from mlip_arena.models import MLIPMap
+
+print(MLIPMap.keys())   # dict_keys(['MACE-MP(M)', 'CHGNet', ...])
+model_cls = MLIPMap["CHGNet"]
+```
+
+You can use `MLIPMap` directly when you need a dict interface (e.g. programmatic selection, serialization).
+
+---
+
+## MLIP
+
+```python
+from mlip_arena.models import MLIP
+```
+
+### Inheritance
+
+`MLIP` inherits from both `torch.nn.Module` and `huggingface_hub.PyTorchModelHubMixin`, and is registered with the HuggingFace Hub tags `["atomistic-simulation", "MLIP"]`.
+
+```
+MLIP
+├── torch.nn.Module
+└── huggingface_hub.PyTorchModelHubMixin
+    └── tags: ["atomistic-simulation", "MLIP"]
+```
+
+### Constructor
+
+```python
+MLIP(model: nn.Module)
+```
+
+<ParamField path="model" type="torch.nn.Module" required>
+  The underlying PyTorch model to wrap. Stored as `self.model`.
+</ParamField>
+
+### `from_pretrained`
+
+Class method inherited from `PyTorchModelHubMixin`. Downloads and instantiates a model from the HuggingFace Hub or a local path.
+
+```python
+mlip = MLIP.from_pretrained("atomind/mace-mp")
+```
+
+<ParamField path="pretrained_model_name_or_path" type="string | Path" required>
+  HuggingFace Hub model ID (e.g. `"atomind/mace-mp"`) or local directory path.
+</ParamField>
+
+<ParamField path="force_download" type="boolean" default="false">
+  Re-download files even if they already exist in the cache.
+</ParamField>
+
+<ParamField path="resume_download" type="boolean | None" default="None">
+  Resume an incomplete download. `None` uses the hub's default behaviour.
+</ParamField>
+
+<ParamField path="proxies" type="dict | None" default="None">
+  Dict of proxies for HTTP/HTTPS requests, passed to `requests`.
+</ParamField>
+
+<ParamField path="token" type="string | boolean | None" default="None">
+  HuggingFace authentication token. Pass `True` to use the cached token from `huggingface-cli login`.
+</ParamField>
+
+<ParamField path="cache_dir" type="string | Path | None" default="None">
+  Override the default HuggingFace cache directory.
+</ParamField>
+
+<ParamField path="local_files_only" type="boolean" default="false">
+  If `True`, only use locally cached files and raise an error if none exist.
+</ParamField>
+
+<ParamField path="revision" type="string | None" default="None">
+  Git revision (branch, tag, or commit hash) to pull from the Hub.
+</ParamField>
+
+<ParamField path="**model_kwargs" type="dict">
+  Additional keyword arguments forwarded to the model's `__init__`.
+</ParamField>
+
+<ResponseField name="return" type="MLIP">
+  An instantiated `MLIP` subclass loaded from the specified source.
+</ResponseField>
+
+### `forward`
+
+```python
+def forward(self, x) -> Any
+```
+
+Delegates to `self.model(x)`. Subclasses override this to handle graph construction and model-specific preprocessing.
+
+<ParamField path="x" type="Any" required>
+  Model input. For `MLIPCalculator` subclasses this is a batched graph data object created by `collate_fn`.
+</ParamField>
+
+<ResponseField name="return" type="Any">
+  Raw output from the underlying model. Subclasses typically return a dict with keys `energy`, `forces`, and `stress`.
+</ResponseField>
+
+---
+
+## Code examples
+
+### Check which models are available
+
+```python
+from mlip_arena.models import MLIPEnum
+
+for model in MLIPEnum:
+    print(model.name)
+```
+
+### Instantiate a model by name
+
+```python
+from mlip_arena.models import MLIPEnum
+
+calculator = MLIPEnum["CHGNet"].value()
+```
+
+### Conditional dispatch based on model
+
+```python
+from mlip_arena.models import MLIPEnum
+
+def make_calculator(name: str):
+    if name not in MLIPEnum.__members__:
+        raise ValueError(f"Unknown model: {name}")
+    return MLIPEnum[name].value()
+
+calc = make_calculator("MACE-MP(M)")
+```

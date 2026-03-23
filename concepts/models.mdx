@@ -1,0 +1,276 @@
+---
+title: "Models"
+description: "How MLIP Arena registers, loads, and exposes foundation MLIP models through a unified ASE Calculator interface."
+keywords: ["MLIPEnum", "MLIP", "ASE Calculator", "registry", "HuggingFace", "PyTorchModelHubMixin"]
+---
+
+MLIP Arena provides a unified interface to 15+ foundation machine learning interatomic potentials. Every model is exposed as an ASE `Calculator` and enumerated in `MLIPEnum` for easy iteration across benchmarks.
+
+## MLIPEnum
+
+`MLIPEnum` is a Python `Enum` built dynamically at import time from `registry.yaml`. Each member's **name** is the model's display name and its **value** is the calculator class.
+
+```python
+from mlip_arena.models import MLIPEnum
+
+# Iterate over all available models
+for model in MLIPEnum:
+    print(model.name, model.value)  # e.g. "MACE-MP(M)" <class MACE_MP_Medium>
+
+# Access a specific model by name
+model_class = MLIPEnum["MACE-MP(M)"].value
+calc = model_class()  # instantiates the ASE Calculator
+```
+
+<Note>
+  `MLIPEnum` only contains models whose packages are installed in the current environment. If a model's dependency is missing, it is silently skipped with a warning rather than raising an import error.
+</Note>
+
+## The MLIP base class
+
+HuggingFace-hosted models inherit from `MLIP`, defined in `mlip_arena/models/__init__.py`:
+
+```python
+# mlip_arena/models/__init__.py (lines 60–103)
+class MLIP(
+    nn.Module,
+    PyTorchModelHubMixin,
+    tags=["atomistic-simulation", "MLIP"],
+):
+    def __init__(self, model: nn.Module) -> None:
+        super().__init__()
+        self.model = model
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str | Path,
+        **model_kwargs,
+    ) -> Self:
+        return super().from_pretrained(
+            pretrained_model_name_or_path,
+            **model_kwargs,
+        )
+
+    def forward(self, x):
+        return self.model(x)
+```
+
+The `PyTorchModelHubMixin` inheritance means any `MLIP` subclass can be uploaded to and downloaded from HuggingFace Hub with `push_to_hub()` and `from_pretrained()`.
+
+## MLIPCalculator
+
+`MLIPCalculator` combines `MLIP` (the neural network) with ASE's `Calculator` interface:
+
+```python
+# mlip_arena/models/__init__.py (lines 105–168)
+class MLIPCalculator(MLIP, Calculator):
+    implemented_properties: list[str] = ["energy", "forces", "stress"]
+
+    def __init__(
+        self,
+        model: nn.Module,
+        device: torch.device | None = None,
+        cutoff: float = 6.0,
+        calculator_kwargs: dict = {},
+    ):
+        MLIP.__init__(self, model=model)
+        Calculator.__init__(self, **calculator_kwargs)
+        self.device = device or get_freer_device()
+        self.cutoff = cutoff
+        self.model.to(self.device)
+
+    def calculate(
+        self,
+        atoms: Atoms,
+        properties: list[str],
+        system_changes: list = all_changes,
+    ):
+        data = collate_fn([atoms], cutoff=self.cutoff).to(self.device)
+        output = self.forward(data)
+        self.results = {}
+        if "energy" in properties:
+            self.results["energy"] = output["energy"].squeeze().item()
+        if "forces" in properties:
+            self.results["forces"] = output["forces"].squeeze().cpu().detach().numpy()
+        if "stress" in properties:
+            self.results["stress"] = output["stress"].squeeze().cpu().detach().numpy()
+```
+
+Device selection is automatic: `get_freer_device()` picks the CUDA GPU with the most free memory, falls back to MPS on Apple Silicon, and finally to CPU.
+
+## External ASE calculators vs HuggingFace models
+
+<Tabs>
+  <Tab title="External ASE calculators">
+    Most models in the registry are implemented as external ASE calculators under `mlip_arena/models/externals/`. They wrap third-party packages and set `module: externals` in the registry.
+
+    **When to use this approach:**
+    - The model already ships its own inference code (e.g., `mace-torch`, `chgnet`, `matgl`).
+    - You want to add a model quickly without implementing a custom graph network.
+
+    ```yaml
+    # registry.yaml entry for an external model
+    MACE-MP(M):
+      module: externals
+      class: MACE_MP_Medium
+      family: mace-mp
+      package: mace-torch==0.3.9
+    ```
+
+    <Warning>
+      Remove any unnecessary entries from the `results` class attribute on your calculator. Extra properties (e.g., magnetic moments) can cause errors during MD simulations. See the CHGNet implementation as a reference.
+    </Warning>
+  </Tab>
+  <Tab title="HuggingFace models">
+    Models hosted on HuggingFace inherit from `MLIP` (which includes `PyTorchModelHubMixin`) and upload their checkpoints to a HF model repository.
+
+    **When to use this approach:**
+    - You want to contribute a new MLIP to the arena with a public checkpoint.
+    - You need version control and reproducibility for your model weights.
+
+    <Steps>
+      <Step title="Inherit PyTorchModelHubMixin">
+        Add `PyTorchModelHubMixin` (or the `MLIP` base class) to your model class definition.
+      </Step>
+      <Step title="Push to HuggingFace Hub">
+        Create a HuggingFace model repository and upload weights:
+        ```python
+        model.push_to_hub("your-username/your-model-name")
+        ```
+      </Step>
+      <Step title="Implement the I/O interface">
+        Follow the template in `mlip_arena/models/README.md` to implement the graph construction and `calculate()` method.
+      </Step>
+      <Step title="Update registry.yaml">
+        Add your model's metadata to `mlip_arena/models/registry.yaml`.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
+
+## The model registry.yaml structure
+
+Each entry in `mlip_arena/models/registry.yaml` has the following fields:
+
+```yaml
+# Example entry from registry.yaml
+CHGNet:
+  module: externals          # Python subpackage under mlip_arena/models/
+  class: CHGNet              # Class name to import
+  family: chgnet             # Module file name (family.py)
+  package: chgnet==0.3.8     # Required pip package
+  checkpoint: v0.3.0         # Checkpoint identifier
+  username: cyrusyc          # HuggingFace username
+  datasets:
+    - MPTrj                  # Training datasets
+  gpu-tasks:                 # Benchmark tasks this model runs on GPU
+    - homonuclear-diatomics
+    - stability
+    - combustion
+    - eos_bulk
+    - wbm_ev
+  prediction: EFSM           # E=Energy, F=Forces, S=Stress, M=Magmoms
+  nvt: true                  # Supports NVT ensemble
+  npt: true                  # Supports NPT ensemble
+  doi: https://doi.org/10.1038/s42256-023-00716-3
+  date: 2023-02-28
+  license: BSD-3-Clause
+```
+
+| Field | Description |
+|-------|-------------|
+| `module` | Subpackage under `mlip_arena/models/` (`externals` or `huggingface`) |
+| `class` | Python class name to import and register |
+| `family` | File name of the module containing the class |
+| `package` | Exact pip package and version required |
+| `checkpoint` | Model checkpoint identifier (path, name, or version string) |
+| `datasets` | Training datasets used |
+| `gpu-tasks` | Benchmark task IDs this model participates in on GPU |
+| `cpu-tasks` | Benchmark task IDs this model participates in on CPU |
+| `prediction` | Prediction types: `E` energy, `F` forces, `S` stress, `M` magnetic moments |
+| `nvt` / `npt` | Whether NVT and NPT molecular dynamics are supported |
+| `doi` | Publication DOI |
+| `license` | Model license |
+
+## Dynamic loading at import time
+
+When you `import mlip_arena.models`, the `__init__.py` reads `registry.yaml` and dynamically imports each model class:
+
+```python
+# mlip_arena/models/__init__.py (lines 35–56)
+with open(Path(__file__).parent / "registry.yaml", encoding="utf-8") as f:
+    REGISTRY = yaml.safe_load(f)
+
+MLIPMap = {}
+for model, metadata in REGISTRY.items():
+    try:
+        module = importlib.import_module(
+            f"{__package__}.{metadata['module']}.{metadata['family']}"
+        )
+        MLIPMap[model] = getattr(module, metadata["class"])
+    except (ModuleNotFoundError, AttributeError, ImportError, Exception) as e:
+        logger.warning(e)
+        continue
+
+MLIPEnum = Enum("MLIPEnum", MLIPMap)
+logger.info(f"Successfully loaded models: {list(MLIPEnum.__members__.keys())}")
+```
+
+Models whose packages are not installed produce a warning and are excluded from `MLIPEnum`. This allows you to install only a subset of models and still use the library.
+
+## Available models
+
+| Model | Family | Training datasets | Predictions | NVT | NPT |
+|-------|--------|-------------------|-------------|-----|-----|
+| MACE-MP(M) | mace-mp | MPTrj | EFS | ✓ | ✓ |
+| MACE-MPA | mace-mp | MPTrj, Alexandria | EFS | ✓ | ✓ |
+| CHGNet | chgnet | MPTrj | EFSM | ✓ | ✓ |
+| M3GNet | matgl | MPF | EFS | ✓ | ✓ |
+| MatterSim | mattersim | MPTrj, Alexandria, Proprietary | EFS | ✓ | ✓ |
+| ORBv2 | orb | MPTrj, Alexandria | EFS | ✓ | ✓ |
+| SevenNet | sevennet | MPTrj | EFS | ✓ | ✓ |
+| eqV2(OMat) | fairchem | OMat, MPTrj, Alexandria | EFS | ✓ | ✗ |
+| eSEN | fairchem | OMat, MPTrj, Alexandria | EFS | ✓ | ✓ |
+| EquiformerV2(OC22) | equiformer | OC22 | EF | ✓ | ✗ |
+| EquiformerV2(OC20) | equiformer | OC20 | EF | ✓ | ✗ |
+| eSCN(OC20) | escn | OC20 | EF | ✓ | ✗ |
+| MACE-OFF(M) | mace-off | SPICE | EFS | ✓ | ✓ |
+| ANI2x | ani | — | EFS | ✓ | ✓ |
+| ALIGNN | alignn | MP22 | EFS | ✓ | ✓ |
+| DeepMD | deepmd | MPTrj | EFS | ✓ | ✓ |
+| ORB | orb | MPTrj, Alexandria | EFS | ✓ | ✓ |
+
+**Prediction types:** `E` = energy, `F` = forces, `S` = stress, `M` = magnetic moments.
+
+## Using get_calculator()
+
+`get_calculator()` from `mlip_arena.tasks.utils` is the recommended way to instantiate a calculator. It handles device selection, optional dispersion correction via `TorchDFTD3Calculator`, and accepts multiple input types:
+
+```python
+# mlip_arena/tasks/utils.py (lines 56–122)
+from mlip_arena.tasks.utils import get_calculator
+from mlip_arena.models import MLIPEnum
+from ase import units
+
+# From MLIPEnum member
+calc = get_calculator(MLIPEnum["MACE-MP(M)"])
+
+# From string name
+calc = get_calculator("CHGNet")
+
+# With dispersion correction (DFT-D3)
+calc = get_calculator(
+    MLIPEnum["MACE-MP(M)"],
+    dispersion=True,
+    dispersion_kwargs=dict(
+        damping="bj", xc="pbe", cutoff=40.0 * units.Bohr
+    ),
+)
+
+# Pass a custom ASE Calculator class directly
+from ase.calculators.emt import EMT
+calc = get_calculator(EMT, calculator_kwargs={"asap_cutoff": True})
+```
+
+`get_calculator()` returns a `BaseCalculator` instance, so it is compatible with all MLIP Arena tasks.

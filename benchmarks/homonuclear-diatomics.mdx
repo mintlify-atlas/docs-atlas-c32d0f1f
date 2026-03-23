@@ -1,0 +1,115 @@
+---
+title: "Homonuclear diatomics"
+description: "Evaluating MLIP dissociation energy curves for elemental homonuclear pairs — the most fundamental test of interatomic interactions."
+---
+
+## Physical motivation
+
+The potential energy curve of a homonuclear diatomic molecule A₂ encodes the most basic interaction between two atoms of the same element. A physically correct model must:
+
+- Predict a bound state with a well-defined equilibrium bond length and dissociation energy
+- Approach a flat asymptote as the two atoms are pulled apart (the dissociation limit)
+- Produce continuous and smooth forces at all distances
+- Respect the correct atomic limit: at large separation, the energy should equal twice the isolated-atom energy
+
+MLIPs trained on bulk and surface datasets often fail this test because their training data contains no examples of truly isolated diatomic fragments. Failures appear as spurious minima, non-monotonic behavior far from equilibrium, or incorrect dissociation limits.
+
+<Info>
+  PBE reference energies and forces are included in the leaderboard for visual comparison only. Due to known plane-wave DFT convergence issues with diatomic molecules and differences in training datasets, PBE values are excluded from rank aggregation.
+</Info>
+
+## What is measured
+
+For each element, the benchmark scans the interatomic distance from very short to well beyond the equilibrium bond length and records:
+
+- **Energy E(r)** in eV, shifted so that E at the largest separation equals zero
+- **Force F(r)** in eV/Å on one atom, computed as the negative gradient of the energy
+
+The scan covers all 118 elements for which a homonuclear diatomic can be constructed. Each model is evaluated on the elements it can support (element coverage varies by model family and training set).
+
+### Metrics
+
+The following quantities are extracted from each E(r) curve:
+
+| Metric | Description |
+|--------|-------------|
+| Equilibrium bond length r₀ | Distance at the energy minimum |
+| Dissociation energy Eₐ | Depth of the potential well relative to the asymptote |
+| Curve smoothness | Presence of spurious oscillations or discontinuities |
+| Asymptotic behavior | Whether E(r) approaches zero correctly at large r |
+
+<Note>
+  The leaderboard ranks models on the shape and smoothness of their E(r) curves. PBE comparison is provided for reference but is not used in scoring.
+</Note>
+
+## Model support
+
+The following models have results for this benchmark. Support is determined by the `gpu-tasks: homonuclear-diatomics` entry in the model registry.
+
+| Model | Family | Training data | Predictions |
+|-------|--------|--------------|-------------|
+| MACE-MP(M) | mace-mp | MPTrj | EFS |
+| MACE-MPA | mace-mp | MPTrj, Alexandria | EFS |
+| MACE-OFF(M) | mace-off | SPICE | EFS |
+| CHGNet | chgnet | MPTrj | EFSM |
+| M3GNet | matgl | MPF | EFS |
+| MatterSim | mattersim | MPTrj, Alexandria | EFS |
+| ORBv2 | orb | MPTrj, Alexandria | EFS |
+| ORB | orb | MPTrj, Alexandria | EFS |
+| SevenNet | sevennet | MPTrj | EFS |
+| eqV2(OMat) | fairchem | OMat, MPTrj, Alexandria | EFS |
+| eSEN | fairchem | OMat, MPTrj, Alexandria | EFS |
+| EquiformerV2(OC22) | equiformer | OC22 | EF |
+| EquiformerV2(OC20) | equiformer | OC20 | EF |
+| eSCN(OC20) | escn | OC20 | EF |
+| ANI2x | ani | SPICE | EFS |
+| ALIGNN | alignn | MP22 | EFS |
+
+<Warning>
+  Models trained on catalysis datasets (OC20, OC22) have limited element coverage compared to universal potentials trained on MPTrj or Alexandria. Their curves may be missing for many elements.
+</Warning>
+
+## How to run
+
+### Using the Prefect flow
+
+The benchmark is wrapped in a Prefect flow in `mlip_arena.flows.diatomics`:
+
+```python
+from prefect.task_runners import ThreadPoolTaskRunner
+from mlip_arena.flows.diatomics import homonuclear_diatomics
+
+homonuclear_diatomics.with_options(
+    task_runner=ThreadPoolTaskRunner(max_workers=3)
+)(
+    model="MACE-MPA"  # or any model name from MLIPEnum
+)
+```
+
+Replace `"MACE-MPA"` with any model name from `mlip_arena.models.MLIPEnum`, or pass a custom ASE `Calculator` instance.
+
+See `benchmarks/diatomics/run.ipynb` for a complete example.
+
+### Viewing raw data
+
+Results for each model are stored as JSON files in `benchmarks/diatomics/<family>/<model>.json`. Each file contains arrays of distances `R`, energies `E`, and forces `F` for every element pair.
+
+## Interpreting results
+
+A well-behaved dissociation curve has these properties:
+
+1. **Single minimum** at the equilibrium bond length with no secondary wells
+2. **Monotonic approach to the asymptote** — energy increases smoothly as the bond stretches and levels off at zero
+3. **No force discontinuities** — the force curve should be the smooth derivative of the energy curve
+4. **Correct atomic limit** — at very large separations the energy should be close to the isolated-atom reference
+
+Common failure modes seen in practice:
+
+- Oscillatory tails beyond the cutoff radius of message-passing layers
+- Spurious energy wells at multiples of the nearest-neighbor distance (artifacts of the radial basis)
+- Incorrect asymptotes for molecules containing elements underrepresented in training data
+- Unphysical repulsion at very short distances for models lacking core-electron information
+
+<Tip>
+  Use the force curve view on the leaderboard to quickly spot discontinuities that are not obvious from the energy curve alone.
+</Tip>

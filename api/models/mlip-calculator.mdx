@@ -1,0 +1,191 @@
+---
+title: 'MLIPCalculator'
+description: 'API reference for the MLIPCalculator class — the ASE-compatible calculator wrapper for MLIP models.'
+keywords: ['MLIPCalculator', 'ASE', 'calculator', 'atomistic simulation', 'forces', 'stress', 'energy']
+---
+
+## Overview
+
+`MLIPCalculator` combines `MLIP` (the PyTorch model wrapper) with ASE's `Calculator` base class to produce a drop-in ASE calculator that can compute energies, forces, and stress for any `Atoms` object.
+
+```python
+from mlip_arena.models import MLIPCalculator
+```
+
+### Inheritance
+
+```
+MLIPCalculator
+├── MLIP  (torch.nn.Module + PyTorchModelHubMixin)
+└── ase.calculators.calculator.Calculator
+```
+
+### Implemented properties
+
+```python
+MLIPCalculator.implemented_properties = ["energy", "forces", "stress"]
+```
+
+---
+
+## Constructor
+
+```python
+MLIPCalculator(
+    model,
+    device=None,
+    cutoff=6.0,
+    restart=None,
+    atoms=None,
+    directory=".",
+    calculator_kwargs={},
+)
+```
+
+<ParamField path="model" type="torch.nn.Module" required>
+  The underlying PyTorch MLIP model. The model is moved to `device` during construction.
+</ParamField>
+
+<ParamField path="device" type="torch.device | None" default="None">
+  Target compute device. When `None`, the device is selected automatically by `get_freer_device()` — see [device selection](#device-selection) below.
+</ParamField>
+
+<ParamField path="cutoff" type="float" default="6.0">
+  Neighbor-list cutoff radius in Angstroms. Passed to `collate_fn` when building the graph for each `calculate` call.
+</ParamField>
+
+<ParamField path="restart" type="str | None" default="None">
+  Path to a restart file. Forwarded to `ase.calculators.calculator.Calculator.__init__`.
+</ParamField>
+
+<ParamField path="atoms" type="ase.Atoms | None" default="None">
+  Optional `Atoms` object to attach on construction. Forwarded to the ASE `Calculator`.
+</ParamField>
+
+<ParamField path="directory" type="str | Path" default=".">
+  Working directory for file I/O. Forwarded to the ASE `Calculator`.
+</ParamField>
+
+<ParamField path="calculator_kwargs" type="dict" default="{}">
+  Extra keyword arguments forwarded verbatim to `ase.calculators.calculator.Calculator.__init__`.
+</ParamField>
+
+---
+
+## `calculate`
+
+```python
+def calculate(
+    self,
+    atoms: Atoms,
+    properties: list[str],
+    system_changes: list = all_changes,
+) -> None
+```
+
+Computes the requested properties for `atoms` and stores the results in `self.results`.
+
+**Execution flow:**
+
+1. Calls `super().calculate(atoms, properties, system_changes)` (ASE bookkeeping).
+2. Builds a batched graph via `collate_fn([atoms], cutoff=self.cutoff)` and moves it to `self.device`.
+3. Runs `self.forward(data)` to get model outputs.
+4. Extracts and stores results:
+
+<ParamField path="atoms" type="ase.Atoms" required>
+  The atomic structure to evaluate.
+</ParamField>
+
+<ParamField path="properties" type="list[string]" required>
+  Subset of `implemented_properties` to compute. Accepted values: `"energy"`, `"forces"`, `"stress"`.
+</ParamField>
+
+<ParamField path="system_changes" type="list" default="all_changes">
+  List of changes since the last calculation. Forwarded to the ASE base class to decide whether to recompute. Defaults to `ase.calculators.calculator.all_changes`.
+</ParamField>
+
+### Results stored in `self.results`
+
+<ResponseField name="energy" type="float">
+  Total potential energy of the system in eV. Populated when `"energy"` is in `properties`.
+</ResponseField>
+
+<ResponseField name="forces" type="numpy.ndarray, shape (N, 3)">
+  Atomic forces in eV/Å. Populated when `"forces"` is in `properties`. Moved to CPU and detached before storing.
+</ResponseField>
+
+<ResponseField name="stress" type="numpy.ndarray, shape (6,) or (3, 3)">
+  Virial stress tensor in eV/Å³ (Voigt notation). Populated when `"stress"` is in `properties`. Moved to CPU and detached before storing.
+</ResponseField>
+
+---
+
+## Device selection
+
+When `device=None` (the default), `MLIPCalculator` calls `get_freer_device()` from `mlip_arena.models.utils` to pick the best available device:
+
+| Condition | Selected device |
+|---|---|
+| One or more CUDA GPUs present | `cuda:<i>` where `<i>` is the GPU with the most free memory |
+| No CUDA, but MPS available (Apple Silicon) | `mps` |
+| Neither CUDA nor MPS | `cpu` |
+
+You can always override this by passing an explicit `device` argument:
+
+```python
+import torch
+calc = MyCHGNetCalculator(device=torch.device("cuda:1"))
+```
+
+---
+
+## MLIPCalculator vs. external calculators
+
+Some models in the registry wrap third-party calculator classes directly rather than subclassing `MLIPCalculator`. Use the following guidance:
+
+| Use case | Recommendation |
+|---|---|
+| Models with a native `MLIPCalculator` subclass | Use `MLIPCalculator` — consistent API, graph construction handled internally |
+| CHGNet | `CHGNet` wraps `CHGNetCalculator` from the `chgnet` package — use via `MLIPEnum["CHGNet"].value()` |
+| MACE-MP / MACE-MPA / MACE-OFF | Wrap `MACECalculator` from `mace-torch` — use via `MLIPEnum` |
+| General usage | Always instantiate through `MLIPEnum` for automatic device selection and consistent behavior |
+
+---
+
+## Code example: using a calculator with ASE
+
+```python
+from ase.build import bulk
+from mlip_arena.models import MLIPEnum
+
+# Build a copper FCC unit cell
+atoms = bulk("Cu", "fcc", a=3.6)
+
+# Instantiate the CHGNet calculator (device chosen automatically)
+calc = MLIPEnum["CHGNet"].value()
+atoms.calc = calc
+
+# Compute energy and forces
+energy = atoms.get_potential_energy()   # eV
+forces = atoms.get_forces()             # shape (N, 3) eV/Å
+stress = atoms.get_stress()             # Voigt, eV/Å³
+
+print(f"Energy: {energy:.4f} eV")
+print(f"Max force: {forces.max():.4f} eV/Å")
+```
+
+### Running a geometry optimisation
+
+```python
+from ase.optimize import BFGS
+from ase.build import bulk
+from mlip_arena.models import MLIPEnum
+
+atoms = bulk("Si", "diamond", a=5.43)
+atoms.calc = MLIPEnum["MACE-MP(M)"].value()
+
+opt = BFGS(atoms, logfile="opt.log")
+opt.run(fmax=0.01)  # convergence threshold in eV/Å
+
+print("Relaxed energy:", atoms.get_potential_energy(), "eV")
+```

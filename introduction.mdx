@@ -1,0 +1,120 @@
+---
+title: "MLIP Arena"
+description: "Fair and transparent benchmark of machine learning interatomic potentials (MLIPs), beyond basic error metrics"
+---
+
+<Note>
+  **NeurIPS 2025 Spotlight** — MLIP Arena has been accepted as a Spotlight at the 39th Annual Conference on Neural Information Processing Systems (NeurIPS 2025). [Read the paper](https://openreview.net/forum?id=SAT0KPA5UO)
+</Note>
+
+Foundation machine learning interatomic potentials (MLIPs), trained on extensive databases containing millions of density functional theory (DFT) calculations, have revolutionized molecular and materials modeling. However, existing benchmarks suffer from **data leakage**, **limited transferability**, and an **over-reliance on error-based metrics** tied to specific DFT references.
+
+MLIP Arena is a unified benchmark platform that evaluates foundation MLIP performance beyond conventional error metrics. It focuses on revealing the physical soundness learned by MLIPs and assessing their utilitarian performance — agnostic to underlying model architecture and training dataset.
+
+## Why MLIP Arena?
+
+<CardGroup cols={2}>
+  <Card title="Beyond Error Metrics" icon="chart-line">
+    Move past static DFT reference comparisons. MLIP Arena reveals failure modes in real-world physical tasks like MD stability and combustion.
+  </Card>
+  <Card title="Fair Benchmarking" icon="scale-balanced">
+    Reproducible, leakage-free benchmarks designed to be agnostic to model architecture and training dataset.
+  </Card>
+  <Card title="15+ Foundation Models" icon="brain">
+    Unified interface for MACE-MP, CHGNet, M3GNet, SevenNet, ORBv2, eqV2, eSEN, MatterSim, ALIGNN, ANI2x, and more.
+  </Card>
+  <Card title="HPC-Scale Workflows" icon="server">
+    Prefect-powered orchestration for parallel benchmark execution on high-throughput computing clusters.
+  </Card>
+</CardGroup>
+
+## Key Capabilities
+
+<CardGroup cols={3}>
+  <Card title="Modular Tasks" icon="puzzle-piece" href="/tasks/overview">
+    OPT, EOS, MD, PHONON, NEB, ELASTICITY — composable and reusable across benchmarks.
+  </Card>
+  <Card title="Physical Soundness Tests" icon="atom" href="/benchmarks/homonuclear-diatomics">
+    Homonuclear diatomics, energy conservation, force equivariance, equation of state.
+  </Card>
+  <Card title="Live Leaderboard" icon="trophy" href="https://huggingface.co/spaces/atomind/mlip-arena">
+    Real-time benchmark results visualized on Hugging Face Spaces with interactive Streamlit dashboards.
+  </Card>
+</CardGroup>
+
+## Benchmark Suite
+
+MLIP Arena evaluates models across two main categories:
+
+**Fundamentals** — tests of basic physical correctness:
+- [Homonuclear Diatomics](/benchmarks/homonuclear-diatomics) — dissociation energy curves for elemental pairs
+- [Equation of State](/benchmarks/equation-of-state) — energy-volume relationships for bulk crystals
+- [Energy-Volume Scans](/benchmarks/energy-volume-scans) — WBM dataset energy-volume profiles
+
+**Molecular Dynamics** — tests of dynamics stability and chemistry:
+- [MD Stability](/benchmarks/stability) — long-timescale NVT/NPT simulation stability
+- [Combustion](/benchmarks/combustion) — reactive molecular dynamics for combustion reactions
+
+## Supported Models
+
+| Model | Family | Training Data | Predictions |
+|-------|--------|---------------|-------------|
+| MACE-MP(M) | MACE | MPTrj | EFS |
+| MACE-MPA | MACE | MPTrj, Alexandria | EFS |
+| CHGNet | CHGNet | MPTrj | EFSM |
+| M3GNet | MatGL | MPF | EFS |
+| MatterSim | MatterSim | MPTrj, Alexandria | EFS |
+| ORBv2 | ORB | MPTrj, Alexandria | EFS |
+| SevenNet | SevenNet | MPTrj | EFS |
+| eqV2(OMat) | FairChem | OMat, MPTrj, Alexandria | EFS |
+| eSEN | FairChem | OMat, MPTrj, Alexandria | EFS |
+| ANI2x | ANI | COMP6 | EFS |
+| ALIGNN | ALIGNN | MP22 | EFS |
+| DeepMD | DeepMD | MPTrj | EFS |
+
+## Quick Start
+
+```bash
+pip install mlip-arena
+```
+
+```python
+from mlip_arena.models import MLIPEnum
+from mlip_arena.tasks import MD
+from mlip_arena.tasks.utils import get_calculator
+from ase.build import bulk
+
+atoms = bulk("Cu", "fcc", a=3.6) * (3, 3, 3)
+
+result = MD(
+    atoms=atoms,
+    calculator=get_calculator(MLIPEnum["MACE-MP(M)"]),
+    ensemble="nvt",
+    total_time=1000,  # 1 ps
+    time_step=2,      # fs
+)
+```
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install from PyPI or build from source with all model dependencies.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run your first benchmark in minutes.
+  </Card>
+</CardGroup>
+
+## Citation
+
+If you use MLIP Arena in your research, please cite:
+
+```bibtex
+@inproceedings{
+    chiang2025mlip,
+    title={{MLIP} Arena: Advancing Fairness and Transparency in Machine Learning Interatomic Potentials via an Open, Accessible Benchmark Platform},
+    author={Yuan Chiang and Tobias Kreiman and Christine Zhang and Matthew C. Kuner and Elizabeth Jin Weaver and Ishan Amin and Hyunsoo Park and Yunsung Lim and Jihan Kim and Daryl Chrzan and Aron Walsh and Samuel M Blau and Aditi S. Krishnapriyan and Mark Asta},
+    booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems Datasets and Benchmarks Track},
+    year={2025},
+    url={https://openreview.net/forum?id=SAT0KPA5UO}
+}
+```

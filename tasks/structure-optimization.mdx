@@ -1,0 +1,142 @@
+---
+title: "Structure optimization"
+description: "Relax atomic positions and cell parameters to a local energy minimum using ASE optimizers."
+---
+
+The `OPT` task minimizes the total energy of an atomic structure by iteratively updating atomic positions (and optionally the unit cell) until the maximum force falls below a convergence threshold.
+
+It wraps ASE's optimizer infrastructure and exposes a flexible interface for choosing the optimizer algorithm, a cell filter, symmetry constraints, and convergence criteria.
+
+## Function signature
+
+```python
+from mlip_arena.tasks import OPT
+
+result = OPT(
+    atoms=atoms,
+    calculator=calc,
+    optimizer="BFGSLineSearch",
+    optimizer_kwargs=None,
+    filter=None,
+    filter_kwargs=None,
+    criterion=None,
+    symmetry=False,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  The atomic structure to optimize. A copy is made internally; the original object is not modified.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  The ASE-compatible calculator used to evaluate energies and forces. Any MLIP registered in `MLIPEnum` or a custom `BaseCalculator` subclass is accepted.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGSLineSearch">
+  Optimizer algorithm. Accepts an ASE `Optimizer` class or one of the following strings:
+
+  | String | Class |
+  |--------|-------|
+  | `"MDMin"` | `ase.optimize.MDMin` |
+  | `"FIRE"` | `ase.optimize.FIRE` |
+  | `"FIRE2"` | `ase.optimize.FIRE2` |
+  | `"LBFGS"` | `ase.optimize.LBFGS` |
+  | `"LBFGSLineSearch"` | `ase.optimize.LBFGSLineSearch` |
+  | `"BFGS"` | `ase.optimize.BFGS` |
+  | `"BFGSLineSearch"` | `ase.optimize.BFGSLineSearch` |
+  | `"QuasiNewton"` | `ase.optimize.QuasiNewton` |
+  | `"GPMin"` | `ase.optimize.GPMin` |
+  | `"CellAwareBFGS"` | `ase.optimize.CellAwareBFGS` |
+  | `"ODE12r"` | `ase.optimize.ODE12r` |
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.filter" type="Filter | str | None" default="None">
+  ASE cell filter to apply before the optimizer. Use a filter to also relax the unit cell. Accepts a `Filter` class or one of the following strings:
+
+  | String | Class |
+  |--------|-------|
+  | `"Filter"` | `ase.filters.Filter` |
+  | `"UnitCell"` | `ase.filters.UnitCellFilter` |
+  | `"ExpCell"` | `ase.filters.ExpCellFilter` |
+  | `"Strain"` | `ase.filters.StrainFilter` |
+  | `"FrechetCell"` | `ase.filters.FrechetCellFilter` |
+
+  `None` relaxes only atomic positions.
+</ParamField>
+
+<ParamField path="body.filter_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the filter constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default='{"steps": 1000}'>
+  Convergence criterion dict forwarded to `optimizer.run()`. Common keys:
+  - `fmax` (float) — maximum force in eV/Å (e.g. `0.05`)
+  - `steps` (int) — maximum number of steps (default `1000`)
+</ParamField>
+
+<ParamField path="body.symmetry" type="boolean" default="false">
+  If `True`, applies an ASE `FixSymmetry` constraint to preserve crystal symmetry during relaxation.
+</ParamField>
+
+## Return value
+
+Returns a `dict` with the following keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `atoms` | `ase.Atoms` | Relaxed structure with calculator attached |
+| `steps` | `int` | Number of optimizer steps taken |
+| `converged` | `bool` | Whether the convergence criterion was satisfied |
+
+## Example
+
+<Steps>
+  <Step title="Import and build a structure">
+    ```python
+    from ase.build import bulk
+    from mlip_arena.tasks import OPT
+    from mlip_arena.tasks.utils import get_calculator
+    from mlip_arena.models import MLIPEnum
+
+    atoms = bulk("Cu", "fcc", a=3.65)  # slightly off equilibrium
+    calc = get_calculator(MLIPEnum.MACE_MP)
+    ```
+  </Step>
+  <Step title="Relax atomic positions only">
+    ```python
+    result = OPT(
+        atoms=atoms,
+        calculator=calc,
+        criterion={"fmax": 0.05, "steps": 500},
+    )
+    print("Converged:", result["converged"])
+    print("Steps:", result["steps"])
+    print("Energy:", result["atoms"].get_potential_energy(), "eV")
+    ```
+  </Step>
+  <Step title="Relax positions and cell">
+    ```python
+    result = OPT(
+        atoms=atoms,
+        calculator=calc,
+        filter="FrechetCell",
+        criterion={"fmax": 0.01, "steps": 1000},
+    )
+    relaxed = result["atoms"]
+    print("Cell:", relaxed.get_cell())
+    ```
+  </Step>
+</Steps>
+
+## Notes on convergence
+
+- The default criterion is `{"steps": 1000}` with no `fmax` limit, so the optimizer always runs for 1000 steps unless you override it.
+- For most property calculations (EOS, elasticity), pass `{"fmax": 0.01}` or tighter.
+- When using a cell filter, the "forces" seen by the optimizer include stress contributions scaled to the same units, so `fmax` applies to both atomic forces and cell degrees of freedom.
+- `FixSymmetry` is useful when you want to keep the space group fixed during relaxation.

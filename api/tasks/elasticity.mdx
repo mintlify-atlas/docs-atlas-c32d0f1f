@@ -1,0 +1,148 @@
+---
+title: 'ELASTICITY — Elastic Tensor'
+description: 'Compute the full elastic tensor, bulk modulus, and related mechanical properties using finite strain deformations.'
+---
+
+## Overview
+
+The `Elasticity` task computes the elastic tensor of a crystal by:
+
+1. Performing a full cell relaxation with the [OPT task](/api/tasks/opt).
+2. Generating a set of deformed structures via `pymatgen.analysis.elasticity.DeformedStructureSet` using the specified normal and shear strains.
+3. Evaluating the stress tensor of each deformed structure with the supplied calculator.
+4. Fitting the elastic constants (`C_ij`) by linear regression of stress vs. strain.
+
+The task is registered in Prefect as **`Elasticity`** with a `TASK_SOURCE + INPUTS` cache policy.
+
+## Function signature
+
+```python
+from mlip_arena.tasks.elasticity import run as ELASTICITY
+
+result = ELASTICITY(
+    atoms,
+    calculator,
+    optimizer="BFGSLineSearch",
+    optimizer_kwargs=None,
+    filter="FrechetCell",
+    filter_kwargs=None,
+    criterion=None,
+    normal_strains=np.linspace(-0.01, 0.01, 4),
+    shear_strains=np.linspace(-0.06, 0.06, 4),
+    persist_opt=True,
+    cache_opt=False,
+)
+```
+
+## Parameters
+
+<ParamField path="body.atoms" type="ase.Atoms" required>
+  Input crystal structure. A copy is made internally.
+</ParamField>
+
+<ParamField path="body.calculator" type="ase.calculators.calculator.BaseCalculator" required>
+  ASE-compatible calculator for stress and force evaluations.
+</ParamField>
+
+<ParamField path="body.optimizer" type="Optimizer | str" default="BFGSLineSearch">
+  Optimizer used for the initial relaxation. See [OPT](/api/tasks/opt) for accepted string values.
+</ParamField>
+
+<ParamField path="body.optimizer_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the optimizer constructor.
+</ParamField>
+
+<ParamField path="body.filter" type="Filter | str | None" default="FrechetCell">
+  Filter applied during the initial relaxation to allow cell optimization. See [OPT](/api/tasks/opt) for accepted string values.
+</ParamField>
+
+<ParamField path="body.filter_kwargs" type="dict | None" default="None">
+  Extra keyword arguments forwarded to the filter constructor.
+</ParamField>
+
+<ParamField path="body.criterion" type="dict | None" default="None">
+  Convergence criteria passed to `optimizer.run()`. See [OPT](/api/tasks/opt) for details.
+</ParamField>
+
+<ParamField path="body.normal_strains" type="list[number] | np.ndarray | None" default="np.linspace(-0.01, 0.01, 4)">
+  Normal strain values applied to generate deformed structures. Defaults to four values uniformly spaced from −0.01 to +0.01 (i.e., ±1%).
+</ParamField>
+
+<ParamField path="body.shear_strains" type="list[number] | np.ndarray | None" default="np.linspace(-0.06, 0.06, 4)">
+  Shear strain values applied to generate deformed structures. Defaults to four values uniformly spaced from −0.06 to +0.06 (i.e., ±6%).
+</ParamField>
+
+<ParamField path="body.persist_opt" type="boolean" default="true">
+  When `True`, the result of the initial OPT sub-task is persisted (saved to Prefect result storage). Useful for inspecting the relaxed structure independently of the elasticity result.
+</ParamField>
+
+<ParamField path="body.cache_opt" type="boolean" default="false">
+  When `True`, the initial OPT sub-task uses caching so that identical relaxations are not recomputed across calls. When `False`, the cache is refreshed every time.
+</ParamField>
+
+## Return value
+
+```python
+{
+    "elastic_tensor": ElasticTensor,
+    "residuals_sum":  float,
+}
+```
+
+<ResponseField name="elastic_tensor" type="pymatgen.analysis.elasticity.ElasticTensor">
+  The fitted elastic tensor (Voigt notation, 6×6) with near-zero components zeroed out at a tolerance of `1e-7`. The `ElasticTensor` object provides properties including:
+
+  ```python
+  et = result["elastic_tensor"]
+
+  # Bulk and shear moduli (GPa)
+  print(et.k_voigt, et.g_voigt)  # Voigt average
+  print(et.k_reuss, et.g_reuss)  # Reuss average
+  print(et.k_vrh,   et.g_vrh)    # VRH average
+
+  # Young's modulus and Poisson ratio
+  print(et.y_mod)       # eV/Å³ — convert: × 160.218 to GPa
+  print(et.universal_anisotropy)
+  ```
+</ResponseField>
+
+<ResponseField name="residuals_sum" type="number">
+  Sum of least-squares fit residuals across all `C_ij` linear regressions. A lower value indicates a better-quality fit and a more linearly elastic material response in the applied strain range.
+</ResponseField>
+
+<Note>
+  If the initial relaxation fails, the function returns a Prefect `State` object instead of a dict. Check `isinstance(result, dict)` before accessing keys.
+</Note>
+
+## Example
+
+```python
+import numpy as np
+from ase.build import bulk
+from mlip_arena.tasks.elasticity import run as ELASTICITY
+from mlip_arena.models import load_calculator
+
+# BCC iron
+atoms = bulk("Fe", "bcc", a=2.87)
+calculator = load_calculator("MACE-MP-0")
+
+result = ELASTICITY(
+    atoms=atoms,
+    calculator=calculator,
+    optimizer="BFGSLineSearch",
+    filter="FrechetCell",
+    criterion={"fmax": 0.001},
+    normal_strains=np.linspace(-0.01, 0.01, 4),
+    shear_strains=np.linspace(-0.06, 0.06, 4),
+    persist_opt=True,
+    cache_opt=False,
+)
+
+et = result["elastic_tensor"]
+print(f"K_VRH  = {et.k_vrh:.1f} GPa")
+print(f"G_VRH  = {et.g_vrh:.1f} GPa")
+print(f"Residuals sum = {result['residuals_sum']:.4f}")
+
+# Full Voigt matrix
+print(et.voigt)
+```
